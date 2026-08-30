@@ -293,7 +293,48 @@ Check these in order - each one matters:
 
 ## 10. Update log
 
-### Latest revision — native-script languages and faster translation
+### Latest revision — real streaming, cancellable requests, copy buttons
+
+**The architecture changed, not just the tuning.** The actual bug behind
+the timeout error some users hit (`ReadTimeoutError` after 120s, resulting
+in a 500) was structural: `/api/chat` waited for the ENTIRE answer to be
+generated before sending anything back. On a general question with slower
+hardware, that can genuinely take longer than any fixed timeout - so the
+real fix is to stop waiting for the whole thing.
+
+`/api/chat` now streams the answer as newline-delimited JSON events
+(`app/services/chat_service.stream_chat_message`), forwarded to the browser
+token-by-token as Ollama generates them
+(`app/services/llm.stream_ollama_chat`, using `httpx`'s async streaming).
+Practically, this means:
+- **The answer appears within seconds and builds up live**, instead of the
+  UI sitting blank for however long full generation takes. Exact-match
+  Article/Section/Rule lookups are unaffected (still instant, no LLM call).
+- **Editing mid-response now genuinely stops generation**, not just the UI.
+  Clicking edit (✎) on any message aborts the fetch; because the backend
+  uses `httpx`'s real async context-managed stream, closing that connection
+  propagates all the way to closing the connection to Ollama - so the model
+  actually stops computing tokens nobody will see, instead of finishing in
+  the background and wasting time/compute. This was tested directly: a
+  simulated slow stream was cancelled after 1 of 5 tokens, and no partial
+  answer was saved to the conversation.
+- **A translating phase, not a second silent wait.** For non-English hybrid
+  (general-question) answers, the model composes the answer in English
+  first (streamed live), then a short second call - using the small,
+  dedicated translation model - converts it, shown as a brief "Translating
+  into {language}…" indicator rather than more blank waiting.
+- **`requirements.txt` gained `httpx`** for the async streaming client -
+  re-run `pip install -r requirements.txt`.
+
+**Copy buttons.** Every message (yours and the assistant's) now has a copy
+icon; user messages show it alongside the existing edit (✎) button on hover.
+
+**Stronger language enforcement.** Hybrid/general answers now carry an
+explicit "(Please answer in {language})" reminder placed right next to the
+question itself, not just buried in the system prompt - models tend to
+follow instructions positioned closer to the actual query more reliably.
+
+### Previous revision — native-script languages and faster translation
 
 **Native scripts, not transliteration.** The previous revision's language
 templates were written in Romanized text (e.g. "Namaste! Main DOJ-RAG

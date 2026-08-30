@@ -4,12 +4,19 @@ Orchestrates a full chat turn:
   2. Run retrieval pipeline (exact -> fuzzy -> hybrid)
   3. Call the local LLM with grounded context (or a clarification/not-found prompt)
   4. Persist user + bot messages to MongoDB
-  5. Return a structured ChatResponse
+  5. Yield the answer as a stream of events (see stream_chat_message)
+
+Streamed as events rather than returned as one blocking call, so the caller
+(the /api/chat route) can forward tokens to the browser as they're
+generated - the user sees the answer build up in real time instead of
+waiting in silence for however long full generation takes, and the request
+becomes cancellable (aborting the connection stops generation server-side
+too, instead of wasting compute on an answer nobody will see).
 """
 import logging
 import re
 import uuid
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, AsyncGenerator
 from app.config import settings
 from app.database.mongodb import conversations_col, messages_col, now
 from app.rag.retriever import retrieve
@@ -130,8 +137,22 @@ def _chunks_to_sources(chunks: List[Dict]) -> List[Dict]:
     return sources
 
 
-def handle_chat_message(message: str, conversation_id: Optional[str], language: str,
-                         user_id: str) -> Dict:
+async def stream_chat_message(message: str, conversation_id: Optional[str], language: str,
+                               user_id: str) -> AsyncGenerator[Dict, None]:
+    """
+    Yields event dicts as the answer is produced:
+      {"type": "chunk", "text": "..."}        - append this text to the answer
+      {"type": "phase", "phase": "translating"} - UI hint, no text change
+      {"type": "replace", "text": "..."}       - replace the answer built so
+                                                  far with this (used when a
+                                                  translation pass swaps out
+                                                  a streamed English draft)
+      {"type": "done", "conversation_id", "sources", "language",
+                "needs_clarification", "suggestions"}
+      {"type": "error", "message": "..."}
+    The final saved message in MongoDB always matches what "done" implies -
+    whatever was last shown via chunk/replace events.
+    """
     if not message or not message.strip():
         raise ValueError("Message cannot be empty.")
 
@@ -141,22 +162,13 @@ def handle_chat_message(message: str, conversation_id: Optional[str], language: 
     _save_message(conversation_id, "user", message, language, [])
 
     # --- Fast path 0: chit-chat / meta questions ---------------------------
-    # Answered instantly with no retrieval and no LLM call. This is what was
-    # missing before: "Hindi aati hai?" (do you know Hindi?) was previously
-    # falling through to legal retrieval and getting a rambling, off-topic
-    # LLM answer generated from a weak keyword match.
     chitchat_category = detect_chitchat(message)
     if chitchat_category:
         answer = get_chitchat_response(chitchat_category, language)
         _save_message(conversation_id, "bot", answer, language, [])
-        return {
-            "conversation_id": conversation_id,
-            "message": answer,
-            "language": language,
-            "sources": [],
-            "needs_clarification": False,
-            "suggestions": [],
-        }
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(conversation_id, language)
+        return
 
     history = _recent_history(conversation_id, settings.MAX_HISTORY_MESSAGES)
 
@@ -167,95 +179,96 @@ def handle_chat_message(message: str, conversation_id: Optional[str], language: 
         intent = result["intent"]
         ref_label = f"{intent['query_type'].capitalize()} {intent['number']}"
         suggestions = [f"{intent['query_type'].capitalize()} {s}" for s in result["suggestions"]]
-        # Template answer in the user's language, no LLM call - this is a
-        # fixed, short message and an LLM round-trip would only add latency.
         answer = get_message("clarify_template", language, ref=ref_label, suggestions=" / ".join(suggestions))
         _save_message(conversation_id, "bot", answer, language, [])
-        return {
-            "conversation_id": conversation_id,
-            "message": answer,
-            "language": language,
-            "sources": [],
-            "needs_clarification": True,
-            "suggestions": result["suggestions"],
-        }
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(conversation_id, language, needs_clarification=True, suggestions=result["suggestions"])
+        return
 
     if mode == "not_found":
         intent = result["intent"]
         ref_label = f"{intent['query_type'].capitalize()} {intent['number']}"
         answer = get_message("not_found_template", language, ref=ref_label)
         _save_message(conversation_id, "bot", answer, language, [])
-        return {
-            "conversation_id": conversation_id,
-            "message": answer,
-            "language": language,
-            "sources": [],
-            "needs_clarification": False,
-            "suggestions": [],
-        }
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(conversation_id, language)
+        return
 
     chunks = result["chunks"]
 
     if not chunks:
         answer = get_message("no_context_template", language)
         _save_message(conversation_id, "bot", answer, language, [])
-        return {
-            "conversation_id": conversation_id,
-            "message": answer,
-            "language": language,
-            "sources": [],
-            "needs_clarification": False,
-            "suggestions": [],
-        }
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(conversation_id, language)
+        return
 
     sources = _chunks_to_sources(chunks)
 
     if mode in ("exact", "suggested"):
         # --- Fast path: exact/near-exact Article/Section/Rule match ---------
-        # No general-purpose LLM generation call. The retrieved text IS the
-        # verified legal answer, so this returns near-instantly instead of
-        # waiting 1-3 minutes for local LLM generation on typical laptop
-        # hardware. If a non-English language is selected, the composed
-        # answer is translated (translate_text is a no-op for English, and
-        # caches every other language's translation in MongoDB so the same
-        # Article is never re-translated on a later request).
+        # Already near-instant (no open-ended generation) - translation (if
+        # needed) is a single short, cached call, not worth streaming
+        # token-by-token, so this is yielded as one chunk.
         answer = _format_direct_answer(chunks)
+        if language != "English":
+            yield {"type": "phase", "phase": "translating"}
         answer = translate_text(answer, language)
         if mode == "suggested":
             note = get_message("suggested_prefix_template", language, number=result.get("suggested_number", ""))
             answer = note + answer
         _save_message(conversation_id, "bot", answer, language, sources)
-        return {
-            "conversation_id": conversation_id,
-            "message": answer,
-            "language": language,
-            "sources": sources,
-            "needs_clarification": False,
-            "suggestions": [],
-        }
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(conversation_id, language, sources=sources)
+        return
 
-    # --- Hybrid/general question: still needs the LLM to synthesize an -----
-    # answer across multiple chunks, but with speed-oriented settings (short
-    # history, capped output length, streaming under the hood) - see llm.py.
+    # --- Hybrid/general question: needs the LLM to synthesize an answer -----
+    # across multiple chunks. Generation is streamed in English first (the
+    # model is faster and more reliable composing English than Indic
+    # scripts directly, and Indic scripts also need more output tokens per
+    # sentence - both were contributing to the old multi-minute/timeout
+    # behavior), so the user sees real progress within seconds instead of
+    # silence. If a non-English language is selected, a second short call
+    # (via the smaller, dedicated translation model) converts the finished
+    # answer - shown as a brief "translating" phase rather than another long
+    # silent wait.
+    english_parts = []
     try:
-        answer = llm.generate_answer(message, chunks, language, history)
+        async for delta in llm.stream_answer(message, chunks, "English", history):
+            english_parts.append(delta)
+            yield {"type": "chunk", "text": delta}
+        answer_en = "".join(english_parts).strip()
+
+        if language != "English":
+            yield {"type": "phase", "phase": "translating"}
+            answer = translate_text(answer_en, language)
+            yield {"type": "replace", "text": answer}
+        else:
+            answer = answer_en
     except llm.OllamaUnavailableError as e:
         logger.error(str(e))
-        # Graceful degrade: return the raw retrieved legal text if the LLM is down,
-        # rather than failing the whole request.
+        # Graceful degrade: return the raw retrieved legal text if the LLM is
+        # slow/down, rather than failing the whole request with a 500 (this
+        # is exactly the failure mode that used to happen on a timeout).
         top = chunks[0]
         answer = (
-            f"(Local LLM unavailable, showing retrieved legal text directly)\n\n"
-            f"{top['text']}"
+            f"(Local LLM unavailable or too slow right now, showing retrieved "
+            f"legal text directly)\n\n{top['text']}"
         )
+        answer = translate_text(answer, language)
+        yield {"type": "replace", "text": answer}
 
     _save_message(conversation_id, "bot", answer, language, sources)
+    yield _done_event(conversation_id, language, sources=sources)
 
+
+def _done_event(conversation_id: str, language: str, sources: List[Dict] = None,
+                 needs_clarification: bool = False, suggestions: List[str] = None) -> Dict:
     return {
+        "type": "done",
         "conversation_id": conversation_id,
-        "message": answer,
         "language": language,
-        "sources": sources,
-        "needs_clarification": False,
-        "suggestions": [],
+        "sources": sources or [],
+        "needs_clarification": needs_clarification,
+        "suggestions": suggestions or [],
     }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
-export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecording, isSending, editingText, onCancelEdit }) {
+export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecording, isSending, editingText, onCancelEdit, onStop }) {
   const [text, setText] = useState("");
   const textareaRef = useRef(null);
 
@@ -81,14 +81,22 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
         />
 
         <button
-          onClick={handleSend}
-          disabled={!text.trim() || isSending}
-          className="shrink-0 w-9 h-9 rounded-full bg-maroon-600 text-paper-100 flex items-center justify-center disabled:opacity-30 hover:bg-maroon-500 transition-colors"
-          aria-label="Send message"
+          onClick={isSending ? onStop : handleSend}
+          disabled={!isSending && !text.trim()}
+          className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-colors disabled:opacity-30 ${
+            isSending ? "bg-red-600 hover:bg-red-500 text-white" : "bg-maroon-600 hover:bg-maroon-500 text-paper-100"
+          }`}
+          aria-label={isSending ? "Stop generating" : "Send message"}
+          title={isSending ? "Stop generating" : "Send"}
         >
-          ➤
+          {isSending ? "■" : "➤"}
         </button>
       </div>
+      {isSending && (
+        <p className="text-[11px] text-charcoal-400 mt-1.5 px-2">
+          Generating a response — you can stop it, or edit your message above to interrupt it.
+        </p>
+      )}
       {isRecording && (
         <p className="text-[11px] text-red-600 mt-1.5 px-2">
           Recording… tap the microphone again to stop and transcribe.

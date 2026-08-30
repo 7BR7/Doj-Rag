@@ -1,18 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import MessageBubble from "./MessageBubble.jsx";
 
-function TypingIndicator() {
-  return (
-    <div className="flex justify-start">
-      <div className="bg-white border border-charcoal-100 border-l-4 border-l-maroon-500 rounded-sm px-4 py-3 shadow-card flex gap-1">
-        <span className="typing-dot w-1.5 h-1.5 rounded-full bg-charcoal-300" />
-        <span className="typing-dot w-1.5 h-1.5 rounded-full bg-charcoal-300" />
-        <span className="typing-dot w-1.5 h-1.5 rounded-full bg-charcoal-300" />
-      </div>
-    </div>
-  );
-}
-
 export default function ChatWindow({ messages, isLoading, onSpeak, onStopSpeak, speakingId, voiceEnabled, onEdit }) {
   const bottomRef = useRef(null);
 
@@ -51,7 +39,9 @@ export default function ChatWindow({ messages, isLoading, onSpeak, onStopSpeak, 
             onEdit={onEdit}
           />
         ))}
-        {isLoading && <TypingIndicator />}
+        {/* No separate "typing" indicator needed - the streaming bot message
+            bubble itself shows a blinking cursor (see MessageBubble) the
+            moment it's added, even before the first token arrives. */}
         <div ref={bottomRef} />
       </div>
     </div>

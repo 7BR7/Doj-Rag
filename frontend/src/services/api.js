@@ -55,17 +55,67 @@ export async function fetchCurrentUser() {
 
 // --- Chat / conversations ---------------------------------------------------
 
-export async function sendChatMessage({ message, conversationId, language }) {
+/**
+ * Streams a chat response as newline-delimited JSON events (see backend
+ * app/services/chat_service.stream_chat_message for event shapes) and
+ * invokes the given callbacks as they arrive. Pass `signal` from an
+ * AbortController to make this cancellable - aborting closes the
+ * connection, which stops generation on the backend too instead of just
+ * ignoring the result client-side.
+ */
+export async function streamChatMessage({ message, conversationId, language, signal, onChunk, onPhase, onReplace, onDone, onError }) {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      message,
-      conversation_id: conversationId || null,
-      language,
-    }),
+    body: JSON.stringify({ message, conversation_id: conversationId || null, language }),
+    signal,
   });
-  return handle(res);
+
+  if (res.status === 401) {
+    localStorage.removeItem("doj_rag_token");
+    localStorage.removeItem("doj_rag_user");
+    window.location.href = "/login";
+    return;
+  }
+  if (!res.ok || !res.body) {
+    let detail = "Request failed";
+    try {
+      const data = await res.json();
+      detail = data.detail || detail;
+    } catch (_) {}
+    onError?.(detail);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line) continue;
+
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch (_) {
+        continue;
+      }
+
+      if (event.type === "chunk") onChunk?.(event.text);
+      else if (event.type === "phase") onPhase?.(event.phase);
+      else if (event.type === "replace") onReplace?.(event.text);
+      else if (event.type === "error") onError?.(event.message);
+      else if (event.type === "done") onDone?.(event);
+    }
+  }
 }
 
 export async function listConversations() {

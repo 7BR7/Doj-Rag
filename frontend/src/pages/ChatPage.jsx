@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../components/Sidebar.jsx";
 import ChatWindow from "../components/ChatWindow.jsx";
@@ -6,7 +6,7 @@ import InputBar from "../components/InputBar.jsx";
 import LanguageSelector from "../components/LanguageSelector.jsx";
 import { useTextToSpeech, useVoiceRecorder } from "../hooks/useSpeech.js";
 import {
-  sendChatMessage,
+  streamChatMessage,
   listConversations,
   getConversation,
   deleteConversation,
@@ -36,6 +36,22 @@ export default function ChatPage() {
 
   const { speak, stop, speakingId } = useTextToSpeech();
   const { isRecording, start: startRecording, stop: stopRecording } = useVoiceRecorder();
+
+  // Tracks the in-flight /api/chat request so it can be cancelled - either
+  // by an explicit "Stop" click, or automatically when the user chooses to
+  // edit a message while a response is still being generated. The backend
+  // may still finish generating and save that response in the background
+  // (there's no cheap way to interrupt a local LLM mid-generation without a
+  // streaming API), but the UI stops waiting on it immediately either way.
+  const abortControllerRef = useRef(null);
+
+  const cancelInFlightRequest = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsSending(false);
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -93,6 +109,7 @@ export default function ChatPage() {
     // If this send follows an "edit" click, truncate everything after the
     // edited message first so we replace the conversation's continuation
     // instead of branching a duplicate.
+    let effectiveConversationId = conversationId;
     if (editingIndex !== null && conversationId) {
       try {
         await truncateConversation(conversationId, editingIndex);
@@ -105,32 +122,91 @@ export default function ChatPage() {
     setEditingIndex(null);
     setEditingText(null);
 
-    setMessages((prev) => [...prev, { sender: "user", message: text, language, sources: [] }]);
+    // Push the user's message, then a placeholder bot message that fills in
+    // live as the stream arrives - this is what makes the answer appear as
+    // it's generated instead of the UI sitting blank for however long full
+    // generation takes.
+    setMessages((prev) => [
+      ...prev,
+      { sender: "user", message: text, language, sources: [] },
+      { sender: "bot", message: "", language, sources: [], streaming: true },
+    ]);
     setIsSending(true);
 
-    try {
-      const res = await sendChatMessage({ message: text, conversationId, language });
-      setMessages((prev) => [
-        ...prev,
-        { sender: "bot", message: res.message, language: res.language, sources: res.sources || [] },
-      ]);
-      if (autoSpeak && voiceEnabled) speak(res.message, res.language, "auto");
-      refreshConversations();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const latestTextRef = { current: "" };
 
-      // First message of a brand new conversation -> now move to its real URL.
-      if (!conversationId) navigate(`/c/${res.conversation_id}`, { replace: true });
+    const updateLastBotMessage = (updater) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        const lastIdx = next.length - 1;
+        next[lastIdx] = { ...next[lastIdx], ...updater(next[lastIdx]) };
+        return next;
+      });
+    };
+
+    try {
+      await streamChatMessage({
+        message: text,
+        conversationId: effectiveConversationId,
+        language,
+        signal: controller.signal,
+        onChunk: (delta) => {
+          latestTextRef.current += delta;
+          updateLastBotMessage((m) => ({ message: m.message + delta, translating: false }));
+        },
+        onPhase: (phase) => {
+          if (phase === "translating") updateLastBotMessage(() => ({ translating: true }));
+        },
+        onReplace: (fullText) => {
+          latestTextRef.current = fullText;
+          updateLastBotMessage(() => ({ message: fullText, translating: false }));
+        },
+        onDone: (event) => {
+          updateLastBotMessage(() => ({
+            sources: event.sources || [],
+            language: event.language,
+            streaming: false,
+            translating: false,
+          }));
+          if (autoSpeak && voiceEnabled) speak(latestTextRef.current, event.language, "auto");
+          refreshConversations();
+          if (!effectiveConversationId) navigate(`/c/${event.conversation_id}`, { replace: true });
+        },
+        onError: (msg) => {
+          setErrorBanner(msg || "Something went wrong. Please try again.");
+          updateLastBotMessage((m) => ({
+            message: m.message || "Sorry, I ran into an error processing that. Please try again.",
+            streaming: false,
+            translating: false,
+          }));
+        },
+      });
     } catch (e) {
-      setErrorBanner(e.message || "Something went wrong. Please try again.");
-      setMessages((prev) => [
-        ...prev,
-        { sender: "bot", message: "Sorry, I ran into an error processing that. Please try again.", language, sources: [] },
-      ]);
+      if (e.name === "AbortError") {
+        // User-initiated cancellation (Stop button, or editing mid-response) -
+        // not a real error. Drop the empty/partial placeholder bot message
+        // rather than leaving a half-written answer sitting in the thread.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.sender === "bot" && last.streaming) return prev.slice(0, -1);
+          return prev;
+        });
+      } else {
+        setErrorBanner(e.message || "Something went wrong. Please try again.");
+      }
     } finally {
+      abortControllerRef.current = null;
       setIsSending(false);
     }
   };
 
   const handleEditMessage = (index, currentText) => {
+    // If a response is still being generated, cancel it first so the user
+    // isn't stuck waiting - editing should be immediate, not blocked behind
+    // whatever's currently in flight.
+    if (isSending) cancelInFlightRequest();
     setEditingIndex(index);
     setEditingText(currentText);
   };
@@ -236,6 +312,7 @@ export default function ChatPage() {
             isSending={isSending}
             editingText={editingText}
             onCancelEdit={handleCancelEdit}
+            onStop={cancelInFlightRequest}
           />
         </div>
       </main>

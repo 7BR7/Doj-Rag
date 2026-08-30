@@ -67,6 +67,7 @@ class Settings:
     # biggest speed lever for non-English answers.
     OLLAMA_TRANSLATE_MODEL: str = os.getenv("OLLAMA_TRANSLATE_MODEL", "") or None
     OLLAMA_TRANSLATE_NUM_PREDICT: int = int(os.getenv("OLLAMA_TRANSLATE_NUM_PREDICT", "300"))
+    OLLAMA_TIMEOUT_SECONDS: int = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
 
     SUPPORTED_LANGUAGES: dict = {}  # populated below after class definition, from app.i18n.messages
 
