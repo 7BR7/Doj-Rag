@@ -1,0 +1,24 @@
+# Optional convenience file: brings up MongoDB for DOJ-RAG.
+# Ollama is intentionally NOT containerized here since it works best with
+# direct GPU/CPU access to your host machine - install it natively
+# (see README section 4.4) and run `ollama serve` alongside this.
+#
+# Usage:
+#   docker compose up -d
+#
+# This matches MONGODB_URI=mongodb://localhost:27017 in .env.example.
+
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: doj-rag-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - doj_rag_mongo_data:/data/db
+
+volumes:
+  doj_rag_mongo_data:
