@@ -25,7 +25,7 @@ export default function ChatPage() {
 
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [language, setLanguage] = useState("English");
+  const [language, setLanguage] = useState("Auto-Detect");
   const [isSending, setIsSending] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -34,7 +34,7 @@ export default function ChatPage() {
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingText, setEditingText] = useState(null);
 
-  const { speak, stop, speakingId } = useTextToSpeech();
+  const { speak, stop, speakingId, unavailableNotice } = useTextToSpeech();
   const { isRecording, start: startRecording, stop: stopRecording } = useVoiceRecorder();
 
   // Tracks the in-flight /api/chat request so it can be cancelled - either
@@ -123,13 +123,14 @@ export default function ChatPage() {
     setEditingText(null);
 
     // Push the user's message, then a placeholder bot message that fills in
-    // live as the stream arrives - this is what makes the answer appear as
-    // it's generated instead of the UI sitting blank for however long full
-    // generation takes.
+    // live as the stream arrives.
+    const isManualOverride = language !== "Auto-Detect";
+    const userLanguageLabel = isManualOverride ? language : "auto";
+
     setMessages((prev) => [
       ...prev,
-      { sender: "user", message: text, language, sources: [] },
-      { sender: "bot", message: "", language, sources: [], streaming: true },
+      { sender: "user", message: text, language: userLanguageLabel, sources: [] },
+      { sender: "bot", message: "", language: isManualOverride ? language : "", sources: [], streaming: true },
     ]);
     setIsSending(true);
 
@@ -151,6 +152,7 @@ export default function ChatPage() {
         message: text,
         conversationId: effectiveConversationId,
         language,
+        overrideLanguage: isManualOverride,
         signal: controller.signal,
         onChunk: (delta) => {
           latestTextRef.current += delta;
@@ -217,10 +219,15 @@ export default function ChatPage() {
   };
 
   const handleRecordStop = async () => {
-    const blob = await stopRecording();
-    if (!blob) return null;
+    const recorded = await stopRecording();
+    if (!recorded) return null;
+    // If browser Web Speech API provided instant transcription, return it directly with 0 latency
+    if (recorded.transcriptText && recorded.transcriptText.trim()) {
+      return recorded.transcriptText.trim();
+    }
+    // Fallback: send recorded audio to optimized Faster-Whisper backend
     try {
-      const res = await transcribeAudio(blob);
+      const res = await transcribeAudio(recorded, language);
       return res.text;
     } catch (e) {
       setErrorBanner(e.message || "Could not transcribe audio.");
@@ -228,7 +235,12 @@ export default function ChatPage() {
     }
   };
 
-  const handleSpeak = (msg, idx) => speak(msg.message, msg.language || language, idx);
+  const handleSpeak = (msg, idx) => {
+    const voiceLang = (msg.language && msg.language !== "Auto-Detect" && msg.language !== "auto")
+      ? msg.language
+      : (language !== "Auto-Detect" ? language : undefined);
+    speak(msg.message, voiceLang, idx);
+  };
 
   const activeTitle = conversationId
     ? conversations.find((c) => c.conversation_id === conversationId)?.title || "Conversation"
@@ -293,6 +305,12 @@ export default function ChatPage() {
           </div>
         )}
 
+        {unavailableNotice && (
+          <div className="bg-amber-50 text-amber-700 text-xs px-6 py-2 border-b border-amber-100">
+            {unavailableNotice}
+          </div>
+        )}
+
         <ChatWindow
           messages={messages}
           isLoading={isSending}
@@ -301,12 +319,13 @@ export default function ChatPage() {
           speakingId={speakingId}
           voiceEnabled={voiceEnabled}
           onEdit={handleEditMessage}
+          onSelectPrompt={handleSend}
         />
 
         <div className="max-w-3xl w-full mx-auto">
           <InputBar
             onSend={handleSend}
-            onRecordStart={startRecording}
+            onRecordStart={() => startRecording(language !== "Auto-Detect" ? language : "English")}
             onRecordStop={handleRecordStop}
             isRecording={isRecording}
             isSending={isSending}

@@ -32,6 +32,7 @@ async def chat(req: ChatRequest, request: Request, current_user: dict = Depends(
                 message=req.message,
                 conversation_id=req.conversation_id,
                 language=req.language,
+                override_language=req.override_language,
                 user_id=current_user["user_id"],
             ):
                 # If the client has already disconnected (e.g. the user

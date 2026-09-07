@@ -21,7 +21,11 @@ from app.config import settings
 from app.database.mongodb import conversations_col, messages_col, now
 from app.rag.retriever import retrieve
 from app.services import llm
-from app.services.language import normalize_language_name
+from app.services.language import (
+    normalize_language_name,
+    detect_script_language,
+    resolve_turn_language,
+)
 from app.utils.chitchat_handler import detect_chitchat, get_chitchat_response
 from app.i18n.messages import get_message
 from app.services.translator import translate_text
@@ -138,7 +142,7 @@ def _chunks_to_sources(chunks: List[Dict]) -> List[Dict]:
 
 
 async def stream_chat_message(message: str, conversation_id: Optional[str], language: str,
-                               user_id: str) -> AsyncGenerator[Dict, None]:
+                               user_id: str, override_language: bool = False) -> AsyncGenerator[Dict, None]:
     """
     Yields event dicts as the answer is produced:
       {"type": "chunk", "text": "..."}        - append this text to the answer
@@ -156,8 +160,20 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     if not message or not message.strip():
         raise ValueError("Message cannot be empty.")
 
-    language = normalize_language_name(language)
+    # Determine the authoritative response language for THIS specific user message.
+    # The language of the current message always takes precedence over stale dropdowns.
+    # Explicit manual override is respected if user intentionally chose a language.
+    language = resolve_turn_language(
+        message=message,
+        requested_language=language,
+        override_language=override_language,
+    )
+
     conversation_id = _get_or_create_conversation(conversation_id, user_id, message)
+
+    # Important: Fetch history BEFORE inserting the current user message into MongoDB.
+    # This prevents the current message from being duplicated in LLM conversation context.
+    history = _recent_history(conversation_id, settings.MAX_HISTORY_MESSAGES)
 
     _save_message(conversation_id, "user", message, language, [])
 
@@ -169,8 +185,6 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         yield {"type": "chunk", "text": answer}
         yield _done_event(conversation_id, language)
         return
-
-    history = _recent_history(conversation_id, settings.MAX_HISTORY_MESSAGES)
 
     result = retrieve(message)
     mode = result["mode"]
@@ -223,15 +237,42 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         return
 
     # --- Hybrid/general question: needs the LLM to synthesize an answer -----
-    # across multiple chunks. Generation is streamed in English first (the
-    # model is faster and more reliable composing English than Indic
-    # scripts directly, and Indic scripts also need more output tokens per
-    # sentence - both were contributing to the old multi-minute/timeout
-    # behavior), so the user sees real progress within seconds instead of
-    # silence. If a non-English language is selected, a second short call
-    # (via the smaller, dedicated translation model) converts the finished
-    # answer - shown as a brief "translating" phase rather than another long
-    # silent wait.
+    # across multiple chunks.
+    #
+    # SINGLE-PASS (default, settings.HYBRID_SINGLE_PASS=True): stream the
+    # answer directly in the target language in ONE LLM call, backed by the
+    # explicit language reminder in llm.py. This is the faster of the two
+    # strategies - for non-English questions it's roughly HALF the LLM time
+    # of the alternative below, since there's no separate translation call.
+    #
+    # TWO-PASS (settings.HYBRID_SINGLE_PASS=False): generate in English
+    # first, then translate with the smaller dedicated model. Slower (two
+    # sequential calls) but can be more reliable for languages/models where
+    # direct non-English generation is noticeably weaker - kept as an
+    # opt-in fallback via .env, not the default, since speed is the
+    # priority here.
+    if settings.HYBRID_SINGLE_PASS:
+        parts = []
+        try:
+            async for delta in llm.stream_answer(message, chunks, language, history):
+                parts.append(delta)
+                yield {"type": "chunk", "text": delta}
+            answer = "".join(parts).strip()
+        except llm.OllamaUnavailableError as e:
+            logger.error(str(e))
+            top = chunks[0]
+            answer = (
+                f"(Local LLM unavailable or too slow right now, showing retrieved "
+                f"legal text directly)\n\n{top['text']}"
+            )
+            answer = translate_text(answer, language)
+            yield {"type": "replace", "text": answer}
+
+        _save_message(conversation_id, "bot", answer, language, sources)
+        yield _done_event(conversation_id, language, sources=sources)
+        return
+
+    # --- Two-pass fallback path ---------------------------------------------
     english_parts = []
     try:
         async for delta in llm.stream_answer(message, chunks, "English", history):

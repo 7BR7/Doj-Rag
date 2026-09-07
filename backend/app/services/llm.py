@@ -32,24 +32,37 @@ class OllamaUnavailableError(Exception):
     pass
 
 
-def _build_messages(system_prompt: str, user_message: str, history: List[Dict] = None) -> list:
+def _build_messages(system_prompt: str, user_message: str, history: List[Dict] = None,
+                    language: str = "English") -> list:
     messages = [{"role": "system", "content": system_prompt}]
     for turn in (history or []):
         messages.append({"role": turn["sender"] == "user" and "user" or "assistant",
                           "content": turn["message"]})
+    if history:
+        if language != "English":
+            messages.append({
+                "role": "system",
+                "content": f"[CRITICAL LANGUAGE DIRECTIVE] The user is now asking in {language}. Disregard the language of previous messages. You MUST respond strictly in {language}."
+            })
+        else:
+            messages.append({
+                "role": "system",
+                "content": "[LANGUAGE DIRECTIVE] The user is asking in English. Respond in English."
+            })
     messages.append({"role": "user", "content": user_message})
     return messages
 
 
 async def stream_ollama_chat(system_prompt: str, user_message: str, history: List[Dict] = None,
-                              model: str = None, num_predict: int = None) -> AsyncGenerator[str, None]:
+                              model: str = None, num_predict: int = None,
+                              language: str = "English") -> AsyncGenerator[str, None]:
     """
     Async-streams the answer as it's generated, yielding text deltas.
     Raises OllamaUnavailableError (before yielding anything) if Ollama can't
     be reached or the model isn't available, so callers can show a clean
     error instead of a half-streamed response.
     """
-    messages = _build_messages(system_prompt, user_message, history)
+    messages = _build_messages(system_prompt, user_message, history, language=language)
     use_model = model or settings.OLLAMA_MODEL
     payload = {
         "model": use_model,
@@ -58,7 +71,7 @@ async def stream_ollama_chat(system_prompt: str, user_message: str, history: Lis
         "options": {
             "num_predict": num_predict or settings.OLLAMA_NUM_PREDICT,
             "num_ctx": settings.OLLAMA_NUM_CTX,
-            "temperature": 0.3,
+            "temperature": 0.2,
         },
         "keep_alive": settings.OLLAMA_KEEP_ALIVE,
     }
@@ -112,14 +125,14 @@ async def collect_stream(agen: AsyncGenerator[str, None]) -> str:
 
 
 def _call_ollama(system_prompt: str, user_message: str, history: List[Dict] = None,
-                  model: str = None, num_predict: int = None) -> str:
+                  model: str = None, num_predict: int = None, language: str = "English") -> str:
     """
     Synchronous, non-streaming call - kept for the short, fixed-shape
     template calls (clarification/not-found/no-context messages) where a
     full round trip is already fast and streaming would add complexity for
     no benefit.
     """
-    messages = _build_messages(system_prompt, user_message, history)
+    messages = _build_messages(system_prompt, user_message, history, language=language)
     timeout_s = settings.OLLAMA_TIMEOUT_SECONDS
 
     try:
@@ -132,7 +145,7 @@ def _call_ollama(system_prompt: str, user_message: str, history: List[Dict] = No
                 "options": {
                     "num_predict": num_predict or settings.OLLAMA_NUM_PREDICT,
                     "num_ctx": settings.OLLAMA_NUM_CTX,
-                    "temperature": 0.3,
+                    "temperature": 0.2,
                 },
                 "keep_alive": settings.OLLAMA_KEEP_ALIVE,
             },
@@ -182,7 +195,7 @@ def generate_answer(message: str, chunks: List[Dict], language: str,
     context_text = build_context_text(chunks)
     system_prompt = BASE_SYSTEM_PROMPT.format(context=context_text, language=language)
     user_message = _with_language_reminder(message, language)
-    return _call_ollama(system_prompt, user_message, history)
+    return _call_ollama(system_prompt, user_message, history, language=language)
 
 
 async def stream_answer(message: str, chunks: List[Dict], language: str,
@@ -192,19 +205,17 @@ async def stream_answer(message: str, chunks: List[Dict], language: str,
     context_text = build_context_text(chunks)
     system_prompt = BASE_SYSTEM_PROMPT.format(context=context_text, language=language)
     user_message = _with_language_reminder(message, language)
-    async for delta in stream_ollama_chat(system_prompt, user_message, history):
+    async for delta in stream_ollama_chat(system_prompt, user_message, history, language=language):
         yield delta
 
 
 def _with_language_reminder(message: str, language: str) -> str:
     """Redundant language directive placed right next to the actual
     question, not just buried in the system prompt - models tend to follow
-    instructions positioned near the end of the input more reliably. This is
-    what makes a Telugu question actually get answered in Telugu instead of
-    silently drifting to English."""
+    instructions positioned near the end of the input more reliably."""
     if language == "English":
         return message
-    return f"{message}\n\n(Please answer in {language}.)"
+    return f"{message}\n\n[Important: Please answer strictly in {language}. Use {language} script.]"
 
 
 def generate_clarification(query_ref: str, suggestions: List[str], language: str) -> str:

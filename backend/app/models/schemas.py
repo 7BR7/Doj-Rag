@@ -20,7 +20,8 @@ class SourceRef(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
-    language: str = "English"
+    language: str = "Auto-Detect"
+    override_language: bool = False
     # user_id intentionally NOT accepted here - the authenticated user (see
     # app/routes/deps.py) always determines whose history this belongs to.
 
@@ -37,6 +38,7 @@ class ChatResponse(BaseModel):
 class TranscribeResponse(BaseModel):
     text: str
     detected_language: str
+    language_code: Optional[str] = None
 
 
 class ConversationSummary(BaseModel):

@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000";
+export const API_BASE = "http://localhost:8000";
 
 function getToken() {
   return localStorage.getItem("doj_rag_token");
@@ -63,11 +63,16 @@ export async function fetchCurrentUser() {
  * connection, which stops generation on the backend too instead of just
  * ignoring the result client-side.
  */
-export async function streamChatMessage({ message, conversationId, language, signal, onChunk, onPhase, onReplace, onDone, onError }) {
+export async function streamChatMessage({ message, conversationId, language, overrideLanguage = false, signal, onChunk, onPhase, onReplace, onDone, onError }) {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ message, conversation_id: conversationId || null, language }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId || null,
+      language: language || "Auto-Detect",
+      override_language: overrideLanguage,
+    }),
     signal,
   });
 
@@ -152,10 +157,13 @@ export async function truncateConversation(conversationId, keepCount) {
   return handle(res);
 }
 
-export async function transcribeAudio(blob) {
+export async function transcribeAudio(blob, language = null) {
   const form = new FormData();
   form.append("audio", blob, "recording.webm");
-  const res = await fetch(`${API_BASE}/api/transcribe`, {
+  const url = language && language !== "Auto-Detect"
+    ? `${API_BASE}/api/transcribe?language=${encodeURIComponent(language)}`
+    : `${API_BASE}/api/transcribe`;
+  const res = await fetch(url, {
     method: "POST",
     headers: authHeaders(),
     body: form,

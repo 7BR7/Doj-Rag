@@ -288,12 +288,68 @@ Check these in order - each one matters:
    has been running continuously and `OLLAMA_KEEP_ALIVE` (default `30m`)
    hasn't expired between messages - reloading a multi-GB model from disk
    can itself take a minute or more.
+5. **Other concrete alternatives, roughly in order of impact:**
+   - **`HYBRID_SINGLE_PASS=true`** (the default) - halves the LLM calls
+     needed for non-English general questions. See the update log above.
+   - **Check whether Ollama is actually using your GPU.** Run `ollama ps`
+     while a request is in flight - if it shows `100% CPU` instead of
+     using a GPU you have available, generation will be many times slower
+     than it needs to be. This is often the single biggest factor.
+   - **Try a smaller quantization**, e.g. `ollama pull llama3.2:3b-instruct-q4_0`
+     instead of the full-precision default - noticeably faster with a
+     modest quality trade-off.
+   - **Lower `OLLAMA_NUM_PREDICT`** (default `220`) if answers can be
+     shorter for your use case - generation time scales roughly linearly
+     with output tokens on CPU.
+   - **Pre-warm translations** (`scripts/pretranslate.py`) so the
+     exact-match path - the most common query shape - never calls the LLM
+     live at all, in any language.
 
 ---
 
 ## 10. Update log
 
-### Latest revision — real streaming, cancellable requests, copy buttons
+### Latest revision — faster hybrid answers, voice fixes, language auto-detect
+
+**One LLM call instead of two, by default.** General/hybrid questions in a
+non-English language previously always generated an English draft, then
+made a *second* call to translate it - roughly doubling the wait for
+exactly the queries that were already the slowest. `HYBRID_SINGLE_PASS`
+(default `true` in `.env`) now generates directly in the target language
+in one streamed call. Verified directly: asking a Telugu question now
+makes exactly one call to the model, in Telugu, not an English call
+followed by a translation call. Set it to `false` if you find direct
+non-English generation noticeably weaker on your model and would rather
+trade speed for that.
+
+**The response language now follows what you actually typed, not just the
+dropdown.** `app/services/language.py` gained real Unicode-script-based
+detection (fast and far more reliable for short chat messages than
+statistical detection) - if your message is written in Tamil script, you
+get a Tamil answer even if the language selector still says "English"
+(e.g. you forgot to switch it, or you're moving between languages
+message-to-message). Tested against real script samples for all 11
+non-English languages - every one detected correctly. The selector still
+governs when your message itself gives no script signal (e.g. plain
+English text).
+
+**Text-to-speech (the Play button) fixed for non-English answers.** Two
+real bugs: (1) `VOICE_LOCALES` in the frontend only had 4 of the 12
+supported languages, so the other 8 silently fell back to an English
+voice; (2) the code only ever set `utterance.lang` as a string, but
+several browsers (Chrome especially) ignore that and use the OS default
+voice unless a `SpeechSynthesisVoice` object is explicitly assigned - which
+reads Latin characters/digits fine but garbles or skips non-Latin script
+entirely (exactly the "only reads English words or numbers" symptom).
+Fixed by explicitly matching and assigning an installed voice, and by
+properly awaiting the browser's async voice list instead of querying it
+before it's loaded. If no voice supporting the selected language is
+actually installed on your device, you'll now see a clear notice instead
+of silent mispronunciation - that part is a genuine OS/browser limitation
+(no voice is installed) that no web app can work around, but at least it's
+no longer invisible.
+
+### Previous revision — real streaming, cancellable requests, copy buttons
 
 **The architecture changed, not just the tuning.** The actual bug behind
 the timeout error some users hit (`ReadTimeoutError` after 120s, resulting

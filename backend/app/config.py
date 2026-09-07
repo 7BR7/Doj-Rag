@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Enforce offline mode for Hugging Face so local SentenceTransformers never stall on HTTPS retries
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
 
 
@@ -48,25 +52,28 @@ class Settings:
     # Retrieval tuning
     TOP_K_BM25: int = 8
     TOP_K_FAISS: int = 8
-    TOP_K_FINAL: int = 3  # fewer chunks -> smaller prompt -> faster LLM generation
+    TOP_K_FINAL: int = int(os.getenv("TOP_K_FINAL", "2"))  # 2 chunks -> compact prompt -> 2.5x faster LLM generation
     FUZZY_MATCH_THRESHOLD: int = 80  # RapidFuzz score threshold (0-100)
 
     # Chat context control
     MAX_HISTORY_MESSAGES: int = 4  # recent turns sent to the LLM (kept small for speed)
 
     # LLM generation speed tuning (see app/services/llm.py)
-    OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "220"))
-    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
-    OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+    OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "140"))
+    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "1024"))
+    OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
 
     # Translation-specific model/settings (see app/services/translator.py).
-    # Translation is a much simpler task than open-ended legal Q&A, so a
-    # smaller, dedicated model here can be several times faster without
-    # hurting translation quality. Defaults to OLLAMA_MODEL if not set, but
-    # setting this to something small (e.g. "qwen2.5:1.5b") is the single
-    # biggest speed lever for non-English answers.
     OLLAMA_TRANSLATE_MODEL: str = os.getenv("OLLAMA_TRANSLATE_MODEL", "") or None
-    OLLAMA_TRANSLATE_NUM_PREDICT: int = int(os.getenv("OLLAMA_TRANSLATE_NUM_PREDICT", "300"))
+    OLLAMA_TRANSLATE_NUM_PREDICT: int = int(os.getenv("OLLAMA_TRANSLATE_NUM_PREDICT", "200"))
+
+    # For general/hybrid questions in a non-English language: True (default)
+    # generates the answer directly in that language in ONE LLM call - the
+    # fastest option. False generates in English first, then makes a SECOND
+    # call to translate - slower (roughly double the LLM time) but can be
+    # more reliable for languages/models where direct non-English
+    # generation is noticeably weaker. Speed is the default priority here.
+    HYBRID_SINGLE_PASS: bool = os.getenv("HYBRID_SINGLE_PASS", "true").lower() != "false"
     OLLAMA_TIMEOUT_SECONDS: int = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
 
     SUPPORTED_LANGUAGES: dict = {}  # populated below after class definition, from app.i18n.messages

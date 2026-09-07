@@ -66,6 +66,11 @@ export default function MessageBubble({ msg, index, onSpeak, onStopSpeak, isSpea
         )}
 
         <div className="flex items-center gap-3 mt-3 text-[11px] text-charcoal-400">
+          {msg.language && msg.language !== "Auto-Detect" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-paper-200 text-charcoal-600 border border-charcoal-200 font-sans" title={`Language: ${msg.language}`}>
+              🌐 {msg.language}
+            </span>
+          )}
           {msg.sources && msg.sources.length > 0 && (
             <button
               onClick={() => setShowSources((s) => !s)}
@@ -78,15 +83,33 @@ export default function MessageBubble({ msg, index, onSpeak, onStopSpeak, isSpea
           {voiceEnabled && !msg.streaming && (
             <>
               {!isSpeaking ? (
-                <button onClick={() => onSpeak(msg)} className="hover:text-charcoal-700">
+                <button
+                  onClick={() => onSpeak(msg)}
+                  className="hover:text-charcoal-700 flex items-center gap-1 transition-colors"
+                  title="Listen to audio speech"
+                >
                   ▶ Play
                 </button>
               ) : (
-                <button onClick={onStopSpeak} className="hover:text-charcoal-700">
-                  ■ Stop
+                <button
+                  onClick={onStopSpeak}
+                  className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-maroon-100 text-maroon-800 text-[11px] font-medium border border-maroon-300 hover:bg-maroon-200 transition-colors shadow-sm"
+                  title="Stop audio playback"
+                >
+                  <span className="flex items-end gap-0.5 h-3 pb-0.5">
+                    <span className="w-0.5 h-2.5 bg-maroon-600 animate-pulse" />
+                    <span className="w-0.5 h-1.5 bg-maroon-600 animate-pulse" style={{ animationDelay: "150ms" }} />
+                    <span className="w-0.5 h-3 bg-maroon-600 animate-pulse" style={{ animationDelay: "300ms" }} />
+                    <span className="w-0.5 h-2 bg-maroon-600 animate-pulse" style={{ animationDelay: "450ms" }} />
+                  </span>
+                  <span>■ Stop</span>
                 </button>
               )}
-              <button onClick={() => onSpeak(msg)} className="hover:text-charcoal-700">
+              <button
+                onClick={() => onSpeak(msg)}
+                className="hover:text-charcoal-700 transition-colors"
+                title="Replay audio from beginning"
+              >
                 ↻ Replay
               </button>
             </>
