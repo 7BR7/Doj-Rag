@@ -4,14 +4,16 @@ import { useAuth } from "./context/AuthContext.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import RegisterPage from "./pages/RegisterPage.jsx";
+import { useI18n } from "./i18n.jsx";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
+  const { t } = useI18n();
 
   if (loading) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-paper-200 text-charcoal-400 text-sm">
-        Loading…
+        {t("loading")}
       </div>
     );
   }

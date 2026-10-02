@@ -4,6 +4,7 @@ import Sidebar from "../components/Sidebar.jsx";
 import ChatWindow from "../components/ChatWindow.jsx";
 import InputBar from "../components/InputBar.jsx";
 import LanguageSelector from "../components/LanguageSelector.jsx";
+import { useI18n } from "../i18n.jsx";
 import { useTextToSpeech, useVoiceRecorder } from "../hooks/useSpeech.js";
 import {
   streamChatMessage,
@@ -11,8 +12,10 @@ import {
   getConversation,
   deleteConversation,
   clearConversationMessages,
+  createConversation,
   truncateConversation,
   transcribeAudio,
+  exportConversation,
 } from "../services/api.js";
 
 // Note: no client-side user ID needed anymore - api.js attaches the
@@ -25,7 +28,7 @@ export default function ChatPage() {
 
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [language, setLanguage] = useState("Auto-Detect");
+  const { language, setLanguage, t } = useI18n();
   const [isSending, setIsSending] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -44,6 +47,8 @@ export default function ChatPage() {
   // (there's no cheap way to interrupt a local LLM mid-generation without a
   // streaming API), but the UI stops waiting on it immediately either way.
   const abortControllerRef = useRef(null);
+  const sendInFlightRef = useRef(false);
+  const skipConversationLoadRef = useRef(null);
 
   const cancelInFlightRequest = useCallback(() => {
     if (abortControllerRef.current) {
@@ -79,19 +84,25 @@ export default function ChatPage() {
       return;
     }
 
+    if (skipConversationLoadRef.current === conversationId) {
+      skipConversationLoadRef.current = null;
+      setMessages([]);
+      return;
+    }
+
     (async () => {
       try {
         const detail = await getConversation(conversationId);
         if (!cancelled) setMessages(detail.messages);
       } catch (e) {
-        if (!cancelled) setErrorBanner("Could not load that conversation.");
+        if (!cancelled) setErrorBanner(t("errorLoad"));
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, t]);
 
   const handleDeleteConversation = async (id) => {
     try {
@@ -99,11 +110,29 @@ export default function ChatPage() {
       if (conversationId === id) navigate("/");
       refreshConversations();
     } catch (e) {
-      setErrorBanner("Could not delete that conversation.");
+      setErrorBanner(t("errorDelete"));
+    }
+  };
+
+  const handleNewConversation = async () => {
+    cancelInFlightRequest();
+    setErrorBanner(null);
+    setEditingIndex(null);
+    setEditingText(null);
+    try {
+      const created = await createConversation();
+      skipConversationLoadRef.current = created.conversation_id;
+      setMessages([]);
+      navigate(`/c/${created.conversation_id}`);
+      refreshConversations();
+    } catch (e) {
+      setErrorBanner(t("genericError"));
     }
   };
 
   const handleSend = async (text) => {
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     setErrorBanner(null);
 
     // If this send follows an "edit" click, truncate everything after the
@@ -115,7 +144,8 @@ export default function ChatPage() {
         await truncateConversation(conversationId, editingIndex);
         setMessages((prev) => prev.slice(0, editingIndex));
       } catch (e) {
-        setErrorBanner("Could not update the conversation before resending.");
+        setErrorBanner(t("errorUpdate"));
+        sendInFlightRef.current = false;
         return;
       }
     }
@@ -126,6 +156,7 @@ export default function ChatPage() {
     // live as the stream arrives.
     const isManualOverride = language !== "Auto-Detect";
     const userLanguageLabel = isManualOverride ? language : "auto";
+    const startTime = Date.now();
 
     setMessages((prev) => [
       ...prev,
@@ -166,9 +197,13 @@ export default function ChatPage() {
           updateLastBotMessage(() => ({ message: fullText, translating: false }));
         },
         onDone: (event) => {
+          const latencyMs = Date.now() - startTime;
           updateLastBotMessage(() => ({
             sources: event.sources || [],
             language: event.language,
+            intent: event.intent || null,
+            relatedProvisions: event.related_provisions || [],
+            latencyMs,
             streaming: false,
             translating: false,
           }));
@@ -177,9 +212,9 @@ export default function ChatPage() {
           if (!effectiveConversationId) navigate(`/c/${event.conversation_id}`, { replace: true });
         },
         onError: (msg) => {
-          setErrorBanner(msg || "Something went wrong. Please try again.");
+          setErrorBanner(msg || t("genericError"));
           updateLastBotMessage((m) => ({
-            message: m.message || "Sorry, I ran into an error processing that. Please try again.",
+            message: m.message || t("genericError"),
             streaming: false,
             translating: false,
           }));
@@ -196,10 +231,11 @@ export default function ChatPage() {
           return prev;
         });
       } else {
-        setErrorBanner(e.message || "Something went wrong. Please try again.");
+        setErrorBanner(e.message || t("genericError"));
       }
     } finally {
       abortControllerRef.current = null;
+      sendInFlightRef.current = false;
       setIsSending(false);
     }
   };
@@ -230,7 +266,7 @@ export default function ChatPage() {
       const res = await transcribeAudio(recorded, language);
       return res.text;
     } catch (e) {
-      setErrorBanner(e.message || "Could not transcribe audio.");
+      setErrorBanner(t("errorTranscribe"));
       return null;
     }
   };
@@ -242,15 +278,28 @@ export default function ChatPage() {
     speak(msg.message, voiceLang, idx);
   };
 
+  const handleExport = async (format = "txt") => {
+    if (!conversationId) {
+      setErrorBanner(t("errorEmptyExport"));
+      return;
+    }
+    try {
+      await exportConversation(conversationId, format);
+    } catch (err) {
+      setErrorBanner(t("errorExport"));
+    }
+  };
+
   const activeTitle = conversationId
-    ? conversations.find((c) => c.conversation_id === conversationId)?.title || "Conversation"
-    : "New conversation";
+    ? conversations.find((c) => c.conversation_id === conversationId)?.title || t("conversation")
+    : t("newConversation");
 
   return (
     <div className="h-screen w-screen flex bg-paper-200 overflow-hidden">
       <Sidebar
         conversations={conversations}
         onDelete={handleDeleteConversation}
+        onNewConversation={handleNewConversation}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
       />
@@ -272,7 +321,7 @@ export default function ChatPage() {
                 }}
                 className="accent-maroon-500"
               />
-              Voice
+              {t("voice")}
             </label>
             <label className="flex items-center gap-1.5 text-xs text-charcoal-500 cursor-pointer select-none">
               <input
@@ -282,19 +331,28 @@ export default function ChatPage() {
                 className="accent-maroon-500"
                 disabled={!voiceEnabled}
               />
-              Auto-speak
+              {t("autoSpeak")}
             </label>
             <LanguageSelector value={language} onChange={setLanguage} />
             {conversationId && (
-              <button
-                onClick={async () => {
-                  await clearConversationMessages(conversationId);
-                  setMessages([]);
-                }}
-                className="text-xs text-charcoal-400 hover:text-red-600 transition-colors"
-              >
-                Clear
-              </button>
+              <>
+                <button
+                  onClick={() => handleExport("txt")}
+                  className="text-xs text-charcoal-600 hover:text-maroon-600 font-medium transition-colors border border-charcoal-200 px-2 py-1 rounded bg-white"
+                  title={t("downloadConversation")}
+                >
+                  {t("export")}
+                </button>
+                <button
+                  onClick={async () => {
+                    await clearConversationMessages(conversationId);
+                    setMessages([]);
+                  }}
+                  className="text-xs text-charcoal-400 hover:text-red-600 transition-colors"
+                >
+                  {t("clear")}
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -320,6 +378,7 @@ export default function ChatPage() {
           voiceEnabled={voiceEnabled}
           onEdit={handleEditMessage}
           onSelectPrompt={handleSend}
+          onExport={() => handleExport("txt")}
         />
 
         <div className="max-w-3xl w-full mx-auto">

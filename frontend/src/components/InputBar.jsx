@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useI18n } from "../i18n.jsx";
 
 export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecording, isSending, editingText, onCancelEdit, onStop }) {
+  const { t } = useI18n();
   const [text, setText] = useState("");
   const textareaRef = useRef(null);
 
@@ -44,7 +46,7 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
     <div className="border-t border-charcoal-100 bg-paper-100 px-4 py-3">
       {isEditing && (
         <div className="flex items-center justify-between max-w-none text-[11px] text-maroon-600 mb-1.5 px-1">
-          <span>Editing a previous message — sending will replace everything after it.</span>
+          <span>{t("editingPrevious")}</span>
           <button
             onClick={() => {
               onCancelEdit();
@@ -52,7 +54,7 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
             }}
             className="text-charcoal-400 hover:text-charcoal-700"
           >
-            Cancel
+            {t("cancel")}
           </button>
         </div>
       )}
@@ -64,8 +66,8 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
               ? "bg-red-600 text-white animate-pulse"
               : "bg-charcoal-100 text-charcoal-600 hover:bg-charcoal-200"
           }`}
-          aria-label={isRecording ? "Stop recording" : "Start recording"}
-          title={isRecording ? "Stop recording" : "Ask by voice"}
+          aria-label={isRecording ? t("stopRecording") : t("startRecording")}
+          title={isRecording ? t("stopRecording") : t("askByVoice")}
         >
           🎤
         </button>
@@ -76,7 +78,7 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder="Ask about an Article, Section, Rule, or any legal question…"
+          placeholder={t("inputPlaceholder")}
           className="flex-1 resize-none bg-transparent outline-none text-sm py-1.5 max-h-32 placeholder:text-charcoal-300"
         />
 
@@ -86,20 +88,20 @@ export default function InputBar({ onSend, onRecordStart, onRecordStop, isRecord
           className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-colors disabled:opacity-30 ${
             isSending ? "bg-red-600 hover:bg-red-500 text-white" : "bg-maroon-600 hover:bg-maroon-500 text-paper-100"
           }`}
-          aria-label={isSending ? "Stop generating" : "Send message"}
-          title={isSending ? "Stop generating" : "Send"}
+          aria-label={isSending ? t("stopGenerating") : t("send")}
+          title={isSending ? t("stopGenerating") : t("send")}
         >
           {isSending ? "■" : "➤"}
         </button>
       </div>
       {isSending && (
         <p className="text-[11px] text-charcoal-400 mt-1.5 px-2">
-          Generating a response — you can stop it, or edit your message above to interrupt it.
+          {t("generating")}
         </p>
       )}
       {isRecording && (
         <p className="text-[11px] text-red-600 mt-1.5 px-2">
-          Recording… tap the microphone again to stop and transcribe.
+          {t("recording")}
         </p>
       )}
     </div>

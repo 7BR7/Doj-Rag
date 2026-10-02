@@ -1,12 +1,8 @@
 import React from "react";
-
-const LANGUAGES = [
-  "Auto-Detect",
-  "English", "Hindi", "Tamil", "Telugu", "Kannada", "Malayalam",
-  "Bengali", "Marathi", "Gujarati", "Punjabi", "Odia", "Urdu",
-];
+import { getNativeLanguageName, UI_LANGUAGES, useI18n } from "../i18n.jsx";
 
 export default function LanguageSelector({ value, onChange }) {
+  const { t } = useI18n();
   const isOverride = value && value !== "Auto-Detect";
 
   return (
@@ -19,22 +15,22 @@ export default function LanguageSelector({ value, onChange }) {
             ? "bg-maroon-50 border-maroon-400 text-maroon-800 font-medium focus:ring-maroon-500"
             : "bg-white border-charcoal-200 text-charcoal-700 focus:ring-maroon-500"
         }`}
-        aria-label="Language selector"
-        title={isOverride ? `Manual override active: answering in ${value}` : "Auto-detecting language per message"}
+        aria-label={t("languageSelector")}
+        title={isOverride ? t("manualOverride", { language: getNativeLanguageName(value) }) : t("autoDetectTitle")}
       >
-        {LANGUAGES.map((lang) => (
+        {UI_LANGUAGES.map((lang) => (
           <option key={lang} value={lang}>
-            {lang === "Auto-Detect" ? "🌐 Auto-Detect" : lang}
+            {lang === "Auto-Detect" ? `🌐 ${t("autoDetect")}` : getNativeLanguageName(lang)}
           </option>
         ))}
       </select>
       {isOverride && (
         <button
           onClick={() => onChange("Auto-Detect")}
-          className="text-[10px] text-maroon-600 hover:text-maroon-800 underline title='Reset to Auto-Detect'"
-          title="Reset to Auto-Detect"
+          className="text-[10px] text-maroon-600 hover:text-maroon-800 underline"
+          title={t("reset")}
         >
-          Reset
+          {t("reset")}
         </button>
       )}
     </div>

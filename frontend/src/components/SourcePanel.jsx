@@ -1,14 +1,16 @@
 import React from "react";
+import { useI18n } from "../i18n.jsx";
 
-function sourceLabel(s) {
+function sourceLabel(s, t) {
   const bits = [];
-  if (s.article) bits.push(`Article ${s.article}`);
-  if (s.section) bits.push(`Section ${s.section}`);
-  if (s.rule) bits.push(`Rule ${s.rule}`);
-  return bits.length ? bits.join(", ") : "Reference";
+  if (s.article) bits.push(`${t("article")} ${s.article}`);
+  if (s.section) bits.push(`${t("section")} ${s.section}`);
+  if (s.rule) bits.push(`${t("rule")} ${s.rule}`);
+  return bits.length ? bits.join(", ") : t("reference");
 }
 
 export default function SourcePanel({ sources }) {
+  const { t } = useI18n();
   if (!sources || sources.length === 0) return null;
 
   return (
@@ -20,7 +22,7 @@ export default function SourcePanel({ sources }) {
         >
           <span className="font-mono text-maroon-600 shrink-0">{String(i + 1).padStart(2, "0")}</span>
           <div>
-            <p className="font-medium text-charcoal-800">{sourceLabel(s)}</p>
+            <p className="font-medium text-charcoal-800">{sourceLabel(s, t)}</p>
             <p className="text-charcoal-500 mt-0.5">
               {s.document}
               {s.part ? ` · ${s.part}` : ""}

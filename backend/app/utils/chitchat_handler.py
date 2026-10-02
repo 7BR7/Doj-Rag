@@ -54,7 +54,7 @@ STATUS_FINE_RE = re.compile(
 GREETING_RE = re.compile(
     r"^\s*(hi|hii+|hello+|hey+|namaste|namaskar|namaskaram|namaskara|vanakkam|nomoshkar|"
     r"sat\s*sri\s*akal|assalam.*alaikum|adaab|pranam|good\s*(?:morning|afternoon|evening|day)|greetings|"
-    r"నమస్తే|నమస్కారం|नमस्ते|नमस्कार|வணக்கம்|নমস্কার|ਸਤਿ\s*ਸ੍ਰੀ\s*ਅਕਾਲ|നമസ്കാരം|ನಮಸ್ಕಾರ)\s*[!.?]*\s*$",
+    r"నమస్తే|నమస్కారం|नमस्ते|नमस्कार|வணக்கம்(?:\s+ராக்தாஸ்)?|নমস্কার|ਸਤਿ\s*ਸ੍ਰੀ\s*ਅਕਾਲ|നമസ്കാരം|ನಮಸ್ಕಾರ)\s*[!.?]*\s*$",
     re.IGNORECASE | re.UNICODE,
 )
 
@@ -80,6 +80,10 @@ WHO_ARE_YOU_RE = re.compile(
     r"can\s*you\s*help\s*me|aap\s*kaun\s*ho|tum\s*kaun\s*ho|meeru\s*evaru|neevu\s*yaaru|neengal\s*yaar|"
     r"నువ్వు\s*ఎవరు|మీరు\s*ఎవరు|आप\s*कौन\s*हैं|आप\s*कौन\s*हो)\b",
     re.IGNORECASE | re.UNICODE,
+)
+HINDI_HELP_RE = re.compile(
+    r"^\s*क्या\s*(?:तुम|आप)\s*(?:मुझे|मेरी)\s*(?:मदद|सहायता|हेल्प)\s*कर\s*सकते\s*(?:हो|हैं)\s*[!?।]*\s*$",
+    re.UNICODE,
 )
 
 # Casual "do you know/speak <language>?" in English or transliterated Indian-
@@ -113,7 +117,7 @@ def detect_chitchat(message: str) -> Optional[str]:
         return "thanks"
     if GOODBYE_RE.match(text):
         return "goodbye"
-    if WHO_ARE_YOU_RE.search(text):
+    if WHO_ARE_YOU_RE.search(text) or HINDI_HELP_RE.match(text):
         return "who_are_you"
     if LANGUAGE_CAPABILITY_RE.search(text):
         return "language_capability"

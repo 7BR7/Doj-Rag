@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { API_BASE } from "../services/api.js";
+import { useI18n } from "../i18n.jsx";
 
 // Display name -> BCP-47 locale
 export const VOICE_LOCALES = {
@@ -199,6 +200,7 @@ function findVoiceForLocale(voices, localePrefix, languageName) {
 
 /** Dual text-to-speech engine: high-fidelity Indic voice stream via /api/tts + browser SpeechSynthesis fallback. */
 export function useTextToSpeech() {
+  const { t } = useI18n();
   const [speakingId, setSpeakingId] = useState(null);
   const [unavailableNotice, setUnavailableNotice] = useState(null);
   const activeSessionRef = useRef(0);
@@ -257,7 +259,7 @@ export function useTextToSpeech() {
 
       const fallbackToSpeechSynthesis = async () => {
         if (!("speechSynthesis" in window)) {
-          setUnavailableNotice("This browser does not support text-to-speech.");
+          setUnavailableNotice(t("ttsUnsupported"));
           setSpeakingId(null);
           return;
         }
@@ -300,7 +302,7 @@ export function useTextToSpeech() {
 
     // Strategy 2: For English, browser SpeechSynthesis provides instant zero-network playback.
     if (!("speechSynthesis" in window)) {
-      setUnavailableNotice("This browser does not support text-to-speech.");
+      setUnavailableNotice(t("ttsUnsupported"));
       setSpeakingId(null);
       return;
     }
@@ -310,7 +312,7 @@ export function useTextToSpeech() {
 
     const voice = findVoiceForLocale(voices, locale, resolvedLanguage);
     playSpeechSynthesisChunks(chunks, locale, voice, sessionId);
-  }, [stop]);
+  }, [stop, t]);
 
   const playSpeechSynthesisChunks = (chunks, locale, voice, sessionId) => {
     // Keepalive for Chromium audio GC bug

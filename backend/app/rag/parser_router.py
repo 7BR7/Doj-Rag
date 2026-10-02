@@ -35,7 +35,9 @@ def route_and_parse(document: Dict) -> List[Dict]:
         return [_normalize_constitution(u) for u in raw_units]
 
     if doc_type in ("act", "rules"):
-        raw_units = parse_act(document_id, document_name, pages, toc_pages)
+        raw_units = parse_act(
+            document_id, document_name, pages, toc_pages, include_plain_sections=True
+        )
         unit_type = "rule" if doc_type == "rules" else "section"
         return [_normalize_act(u, unit_type) for u in raw_units]
 

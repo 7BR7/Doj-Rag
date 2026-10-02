@@ -485,7 +485,7 @@ sent through legal retrieval where a stray keyword match could produce an
 irrelevant, rambling answer.
 
 **Edit and resend** — hover a message you sent to reveal an edit (✎)
-button; editing and resending truncates everything after that point (via
+button; editing and resending truncates everythitng after that point (via
 the new `PUT /api/conversations/{id}/truncate` endpoint) so the
 conversation continues from the edited message instead of branching.
 

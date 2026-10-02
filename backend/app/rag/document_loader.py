@@ -29,6 +29,14 @@ def detect_document_type(pages: List[str], filename: str) -> str:
     if "constitution of india" in sample or "constitution" in fname:
         return "constitution"
 
+    modern_statute_markers = (
+        "bharatiya nyaya sanhita",
+        "bharatiya nagarik suraksha sanhita",
+        "bharatiya sakshya adhiniyam",
+    )
+    if any(marker in sample for marker in modern_statute_markers) or os.path.splitext(fname)[0] in {"bns", "bnss", "bsa"}:
+        return "act"
+
     judgment_markers = ["versus", " vs. ", " vs ", "appellant", "respondent", "judgment", "bench:"]
     if any(m in sample for m in judgment_markers) and ("court" in sample):
         return "judgment"

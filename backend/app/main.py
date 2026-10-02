@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routes import chat, voice, conversations, auth
+from app.routes import chat, voice, conversations, auth, nlp, export
 from app.database.mongodb import MongoConnectionError
 
 logging.basicConfig(
@@ -37,6 +37,8 @@ app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(voice.router)
 app.include_router(conversations.router)
+app.include_router(nlp.router)
+app.include_router(export.router)
 
 
 @app.exception_handler(MongoConnectionError)
@@ -76,11 +78,28 @@ def health():
     except Exception as e:
         checks["storage"] = f"error: {e}"
 
-    import requests
+    # LLM provider status
+    from app.services.llm import LLMProvider
+    provider = LLMProvider.active_provider()
+    model = LLMProvider.active_model()
+    checks["llm_provider"] = provider
+    checks["llm_model"] = model
+
+    if provider == "groq":
+        checks["groq"] = "configured"
+    else:
+        import requests as _req
+        try:
+            r = _req.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=3)
+            checks["ollama"] = "ok" if r.ok else f"error: HTTP {r.status_code}"
+        except Exception as e:
+            checks["ollama"] = f"unreachable: {e}"
+
     try:
-        r = requests.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=3)
-        checks["ollama"] = "ok" if r.ok else f"error: HTTP {r.status_code}"
+        from app.nlp.knowledge_graph import get_graph
+        G = get_graph()
+        checks["knowledge_graph"] = f"{G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
     except Exception as e:
-        checks["ollama"] = f"unreachable: {e}"
+        checks["knowledge_graph"] = f"error: {e}"
 
     return checks

@@ -28,6 +28,13 @@ Legal context:
 ---
 """
 
+GENERAL_SYSTEM_PROMPT = """You are DOJ-RAG, a helpful and friendly general-purpose assistant.
+Answer the user's question directly using your general knowledge and reasoning.
+Keep the response clear and useful, and ask a follow-up question when the request
+is ambiguous. Be honest when you are uncertain or when information may be out of date.
+Respond only in {language}.
+"""
+
 CLARIFICATION_PROMPT = """The user asked about "{query_ref}", which was not found exactly.
 Similar valid references are: {suggestions}.
 Write a short, friendly message asking the user to clarify which one they meant,

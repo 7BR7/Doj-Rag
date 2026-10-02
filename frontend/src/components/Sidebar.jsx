@@ -1,20 +1,28 @@
 import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useI18n } from "../i18n.jsx";
 
-function formatDate(iso) {
+const DATE_LOCALES = {
+  English: "en-IN", Hindi: "hi-IN", Tamil: "ta-IN", Urdu: "ur-IN", Punjabi: "pa-IN",
+  Odia: "or-IN", Telugu: "te-IN", Kannada: "kn-IN", Malayalam: "ml-IN", Bengali: "bn-IN",
+  Marathi: "mr-IN", Gujarati: "gu-IN",
+};
+
+function formatDate(iso, language) {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return d.toLocaleDateString(DATE_LOCALES[language] || "en-IN", { month: "short", day: "numeric" });
   } catch {
     return "";
   }
 }
 
-export default function Sidebar({ conversations, onDelete, collapsed, onToggleCollapse }) {
+export default function Sidebar({ conversations, onDelete, onNewConversation, collapsed, onToggleCollapse }) {
   const navigate = useNavigate();
   const { conversationId: activeId } = useParams();
   const { user, logout } = useAuth();
+  const { t, uiLanguage } = useI18n();
 
   const handleLogout = () => {
     logout();
@@ -36,7 +44,7 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
             <div>
               <p className="font-serif text-base leading-tight text-paper-100">DOJ-RAG</p>
               <p className="text-[10px] uppercase tracking-[0.18em] text-gold-400">
-                Legal Assistant
+                {t("legalAssistant")}
               </p>
             </div>
           </div>
@@ -44,7 +52,7 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
         <button
           onClick={onToggleCollapse}
           className="text-maroon-100/70 hover:text-paper-100 transition-colors p-1"
-          aria-label="Toggle sidebar"
+          aria-label={t("toggleSidebar")}
         >
           {collapsed ? "»" : "«"}
         </button>
@@ -52,18 +60,18 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
 
       <div className="px-3 pt-4">
         <button
-          onClick={() => navigate("/")}
+          onClick={onNewConversation}
           className="w-full flex items-center gap-2 justify-center rounded border border-gold-500/50 bg-gold-500/10 hover:bg-gold-500/20 text-gold-100 text-sm py-2 transition-colors"
         >
           <span className="text-gold-400">+</span>
-          {!collapsed && <span>New conversation</span>}
+          {!collapsed && <span>{t("newConversation")}</span>}
         </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-1">
         {conversations.length === 0 && !collapsed && (
           <p className="text-maroon-200/70 text-xs px-2 py-4">
-            No conversations yet. Ask a legal question to begin.
+            {t("emptyConversations")}
           </p>
         )}
         {conversations.map((c) => (
@@ -80,7 +88,7 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
               {!collapsed && (
                 <>
                   <p className="truncate">{c.title}</p>
-                  <p className="text-[10px] text-maroon-300 mt-0.5">{formatDate(c.updated_at)}</p>
+                  <p className="text-[10px] text-maroon-300 mt-0.5">{formatDate(c.updated_at, uiLanguage)}</p>
                 </>
               )}
             </div>
@@ -91,8 +99,8 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
                   onDelete(c.conversation_id);
                 }}
                 className="opacity-0 group-hover:opacity-100 text-maroon-300 hover:text-red-300 text-xs px-1 transition-opacity"
-                aria-label="Delete conversation"
-                title="Delete conversation"
+                aria-label={t("deleteConversation")}
+                title={t("deleteConversation")}
               >
                 ✕
               </button>
@@ -106,19 +114,17 @@ export default function Sidebar({ conversations, onDelete, collapsed, onToggleCo
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <p className="text-xs text-paper-100 truncate">{user?.username}</p>
-              <p className="text-[10px] text-maroon-300">Signed in</p>
+              <p className="text-[10px] text-maroon-300">{t("signedIn")}</p>
             </div>
             <button
               onClick={handleLogout}
               className="text-[11px] text-maroon-200 hover:text-paper-100 shrink-0 ml-2"
             >
-              Log out
+              {t("logout")}
             </button>
           </div>
           <p className="text-[10px] text-maroon-300 leading-relaxed">
-            Answers are generated from the retrieved legal text of your
-            processed documents. Always verify against the original source
-            for formal use.
+            {t("disclaimer")}
           </p>
         </div>
       )}

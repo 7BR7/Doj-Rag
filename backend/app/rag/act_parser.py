@@ -22,6 +22,9 @@ CHAPTER_RE = re.compile(r"^CHAPTER\s+([IVXLCDM]+[A-Z]?)\b[\s:.\-]*(.*)$", re.IGN
 SECTION_ANCHOR_RE = re.compile(
     r"(?<!\d)(?P<num>\d{1,4}[A-Z]?)\.\s+(?P<title>[A-Z][^\n]{2,180}?)\.\s*[—\-]{1,2}\s*",
 )
+PLAIN_SECTION_ANCHOR_RE = re.compile(
+    r"(?m)^[ \t]*(?P<num>\d{1,4}[A-Z]?)\.\s+"
+)
 
 
 def _page_boundaries(pages: List[str]):
@@ -79,12 +82,19 @@ def _extract_act_name(pages: List[str]) -> str:
 
 
 def parse_act(document_id: str, document_name: str, pages: List[str],
-              toc_pages: set) -> List[Dict]:
+              toc_pages: set, include_plain_sections: bool = False) -> List[Dict]:
     full_text, offsets = _page_boundaries(pages)
     chapter_markers = _track_chapters(pages, toc_pages)
     act_name = _extract_act_name(pages)
 
     anchors = list(SECTION_ANCHOR_RE.finditer(full_text))
+    if include_plain_sections:
+        anchored_numbers = {match.start("num") for match in anchors}
+        anchors.extend(
+            match for match in PLAIN_SECTION_ANCHOR_RE.finditer(full_text)
+            if match.start("num") not in anchored_numbers
+        )
+        anchors.sort(key=lambda match: match.start("num"))
     sections, seen = [], {}
 
     for i, m in enumerate(anchors):
@@ -94,7 +104,7 @@ def parse_act(document_id: str, document_name: str, pages: List[str],
             continue
 
         num = m.group("num")
-        title = re.sub(r"\s+", " ", m.group("title")).strip()
+        title = re.sub(r"\s+", " ", m.groupdict().get("title") or "").strip() or None
         body_start = m.end()
         body_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(full_text)
         body = full_text[body_start:body_end].strip()

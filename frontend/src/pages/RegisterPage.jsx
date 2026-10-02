@@ -1,9 +1,12 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
+import LanguageSelector from "../components/LanguageSelector.jsx";
+import { useI18n } from "../i18n.jsx";
 
 export default function RegisterPage() {
   const { register } = useAuth();
+  const { language, setLanguage, t } = useI18n();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -17,11 +20,11 @@ export default function RegisterPage() {
     setError(null);
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError(t("passwordMismatch"));
       return;
     }
     if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+      setError(t("passwordMin"));
       return;
     }
 
@@ -30,7 +33,7 @@ export default function RegisterPage() {
       await register(username.trim(), email.trim(), password);
       navigate("/");
     } catch (err) {
-      setError(err.message || "Could not create your account.");
+      setError(t("registerError"));
     } finally {
       setSubmitting(false);
     }
@@ -39,17 +42,20 @@ export default function RegisterPage() {
   return (
     <div className="h-screen w-screen flex items-center justify-center bg-paper-200 px-4">
       <div className="w-full max-w-sm bg-white border border-charcoal-100 rounded shadow-card p-8">
+        <div className="flex justify-end mb-4">
+          <LanguageSelector value={language} onChange={setLanguage} />
+        </div>
         <div className="flex flex-col items-center mb-6">
           <div className="w-12 h-12 seal-ring text-maroon-500 flex items-center justify-center mb-3 relative">
             <span className="font-serif text-lg">न्या</span>
           </div>
-          <h1 className="font-serif text-xl text-charcoal-800">Create your account</h1>
-          <p className="text-xs text-charcoal-400 mt-1">Your conversation history stays private to your account</p>
+          <h1 className="font-serif text-xl text-charcoal-800">{t("createAccount")}</h1>
+          <p className="text-xs text-charcoal-400 mt-1">{t("privateHistory")}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs text-charcoal-500 mb-1">Username</label>
+            <label className="block text-xs text-charcoal-500 mb-1">{t("username")}</label>
             <input
               type="text"
               value={username}
@@ -61,7 +67,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-charcoal-500 mb-1">Email (optional)</label>
+            <label className="block text-xs text-charcoal-500 mb-1">{t("emailOptional")}</label>
             <input
               type="email"
               value={email}
@@ -70,7 +76,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-charcoal-500 mb-1">Password</label>
+            <label className="block text-xs text-charcoal-500 mb-1">{t("password")}</label>
             <input
               type="password"
               value={password}
@@ -81,7 +87,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-charcoal-500 mb-1">Confirm password</label>
+            <label className="block text-xs text-charcoal-500 mb-1">{t("confirmPassword")}</label>
             <input
               type="password"
               value={confirmPassword}
@@ -98,14 +104,14 @@ export default function RegisterPage() {
             disabled={submitting}
             className="w-full bg-maroon-600 hover:bg-maroon-500 disabled:opacity-50 text-paper-100 text-sm py-2.5 rounded transition-colors"
           >
-            {submitting ? "Creating account…" : "Create account"}
+            {submitting ? t("creatingAccount") : t("createAccount")}
           </button>
         </form>
 
         <p className="text-xs text-charcoal-400 text-center mt-5">
-          Already have an account?{" "}
+          {t("alreadyAccount")}{" "}
           <Link to="/login" className="text-maroon-600 hover:text-maroon-500 font-medium">
-            Sign in
+            {t("signIn")}
           </Link>
         </p>
       </div>

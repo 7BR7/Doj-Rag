@@ -1,8 +1,8 @@
 """
 Orchestrates a full chat turn:
   1. Load/create conversation
-  2. Run retrieval pipeline (exact -> fuzzy -> hybrid)
-  3. Call the local LLM with grounded context (or a clarification/not-found prompt)
+    2. Answer casual/general questions directly, or retrieve legal context
+    3. Call the LLM with legal context when needed (or a clarification/not-found prompt)
   4. Persist user + bot messages to MongoDB
   5. Yield the answer as a stream of events (see stream_chat_message)
 
@@ -28,12 +28,18 @@ from app.services.language import (
 )
 from app.utils.chitchat_handler import detect_chitchat, get_chitchat_response
 from app.i18n.messages import get_message
-from app.services.translator import translate_text
+from app.services.translator import (
+    translate_text,
+    stream_translate_text,
+    TranslationUnavailableError,
+)
+from app.utils.legal_query_parser import is_legal_query
 
 logger = logging.getLogger("doj_rag.chat_service")
 
 
 def _get_or_create_conversation(conversation_id: Optional[str], user_id: str, first_message: str) -> str:
+    title = (first_message[:60] + "...") if len(first_message) > 60 else first_message
     if conversation_id:
         existing = conversations_col().find_one({"conversation_id": conversation_id})
         # Only reuse the conversation if it exists AND belongs to this user -
@@ -41,11 +47,15 @@ def _get_or_create_conversation(conversation_id: Optional[str], user_id: str, fi
         # one account's messages be appended into (or collide with) another
         # account's conversation.
         if existing and existing.get("user_id") == user_id:
+            if existing.get("title") == "New conversation":
+                conversations_col().update_one(
+                    {"conversation_id": conversation_id, "user_id": user_id},
+                    {"$set": {"title": title}},
+                )
             return conversation_id
         conversation_id = None
 
     new_id = str(uuid.uuid4())
-    title = (first_message[:60] + "...") if len(first_message) > 60 else first_message
     conversations_col().insert_one({
         "conversation_id": new_id,
         "user_id": user_id,
@@ -186,8 +196,45 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         yield _done_event(conversation_id, language)
         return
 
+    if not is_legal_query(message):
+        parts = []
+        try:
+            async for delta in llm.stream_general_answer(message, language, history):
+                parts.append(delta)
+                yield {"type": "chunk", "text": delta}
+        except llm.LLMUnavailableError as e:
+            logger.error("General answer unavailable: %s", e)
+            answer = get_message("llm_unavailable", language)
+            _save_message(conversation_id, "bot", answer, language, [])
+            yield {"type": "replace", "text": answer}
+            yield _done_event(conversation_id, language)
+            return
+        answer = "".join(parts).strip()
+        _save_message(conversation_id, "bot", answer, language, [])
+        yield _done_event(conversation_id, language)
+        return
+
     result = retrieve(message)
     mode = result["mode"]
+
+    # Extract NLP intent & knowledge graph related provisions for enriched UI response
+    detected_intent = None
+    related_provisions = []
+    try:
+        from app.nlp.nlp_pipeline import detect_intent
+        detected_intent = detect_intent(message)
+    except Exception:
+        pass
+
+    try:
+        from app.nlp.knowledge_graph import get_related_provisions
+        intent_info = result.get("intent", {})
+        q_type = intent_info.get("query_type")
+        q_num = intent_info.get("number")
+        if q_type in ("article", "section") and q_num:
+            related_provisions = get_related_provisions(q_type.capitalize(), q_num, max_hops=1, max_results=4)
+    except Exception:
+        pass
 
     if mode == "clarify":
         intent = result["intent"]
@@ -196,7 +243,29 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         answer = get_message("clarify_template", language, ref=ref_label, suggestions=" / ".join(suggestions))
         _save_message(conversation_id, "bot", answer, language, [])
         yield {"type": "chunk", "text": answer}
-        yield _done_event(conversation_id, language, needs_clarification=True, suggestions=result["suggestions"])
+        yield _done_event(
+            conversation_id,
+            language,
+            needs_clarification=True,
+            suggestions=result["suggestions"],
+            intent=detected_intent,
+        )
+        return
+
+    if mode == "clarify_act":
+        intent = result["intent"]
+        answer = get_message(
+            "ambiguous_act_template",
+            language,
+            number=intent["number"],
+            acts=", ".join(result["act_names"]),
+        )
+        _save_message(conversation_id, "bot", answer, language, [])
+        yield {"type": "chunk", "text": answer}
+        yield _done_event(
+            conversation_id, language, needs_clarification=True,
+            suggestions=result["act_names"],
+        )
         return
 
     if mode == "not_found":
@@ -205,7 +274,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         answer = get_message("not_found_template", language, ref=ref_label)
         _save_message(conversation_id, "bot", answer, language, [])
         yield {"type": "chunk", "text": answer}
-        yield _done_event(conversation_id, language)
+        yield _done_event(conversation_id, language, intent=detected_intent)
         return
 
     chunks = result["chunks"]
@@ -214,7 +283,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         answer = get_message("no_context_template", language)
         _save_message(conversation_id, "bot", answer, language, [])
         yield {"type": "chunk", "text": answer}
-        yield _done_event(conversation_id, language)
+        yield _done_event(conversation_id, language, intent=detected_intent)
         return
 
     sources = _chunks_to_sources(chunks)
@@ -222,18 +291,41 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     if mode in ("exact", "suggested"):
         # --- Fast path: exact/near-exact Article/Section/Rule match ---------
         # Already near-instant (no open-ended generation) - translation (if
-        # needed) is a single short, cached call, not worth streaming
-        # token-by-token, so this is yielded as one chunk.
-        answer = _format_direct_answer(chunks)
+        # needed) streams into the chat and is cached after completion.
+        source_answer = _format_direct_answer(chunks)
+        prefix = ""
+        if mode == "suggested":
+            prefix = get_message(
+                "suggested_prefix_template",
+                language,
+                number=result.get("suggested_number", ""),
+            )
+            yield {"type": "chunk", "text": prefix}
+
         if language != "English":
             yield {"type": "phase", "phase": "translating"}
-        answer = translate_text(answer, language)
-        if mode == "suggested":
-            note = get_message("suggested_prefix_template", language, number=result.get("suggested_number", ""))
-            answer = note + answer
+            translated_parts = []
+            try:
+                async for delta in stream_translate_text(source_answer, language):
+                    translated_parts.append(delta)
+                    yield {"type": "chunk", "text": delta}
+                answer = "".join(translated_parts).strip()
+            except TranslationUnavailableError:
+                answer = get_message("translation_unavailable", language)
+                yield {"type": "replace", "text": answer}
+        else:
+            answer = source_answer
+        answer = prefix + answer
         _save_message(conversation_id, "bot", answer, language, sources)
-        yield {"type": "chunk", "text": answer}
-        yield _done_event(conversation_id, language, sources=sources)
+        if language == "English":
+            yield {"type": "chunk", "text": answer}
+        yield _done_event(
+            conversation_id,
+            language,
+            sources=sources,
+            intent=detected_intent,
+            related_provisions=related_provisions,
+        )
         return
 
     # --- Hybrid/general question: needs the LLM to synthesize an answer -----
@@ -258,7 +350,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
                 parts.append(delta)
                 yield {"type": "chunk", "text": delta}
             answer = "".join(parts).strip()
-        except llm.OllamaUnavailableError as e:
+        except (llm.OllamaUnavailableError, llm.LLMUnavailableError) as e:
             logger.error(str(e))
             top = chunks[0]
             answer = (
@@ -269,7 +361,13 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             yield {"type": "replace", "text": answer}
 
         _save_message(conversation_id, "bot", answer, language, sources)
-        yield _done_event(conversation_id, language, sources=sources)
+        yield _done_event(
+            conversation_id,
+            language,
+            sources=sources,
+            intent=detected_intent,
+            related_provisions=related_provisions,
+        )
         return
 
     # --- Two-pass fallback path ---------------------------------------------
@@ -286,7 +384,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             yield {"type": "replace", "text": answer}
         else:
             answer = answer_en
-    except llm.OllamaUnavailableError as e:
+    except (llm.OllamaUnavailableError, llm.LLMUnavailableError) as e:
         logger.error(str(e))
         # Graceful degrade: return the raw retrieved legal text if the LLM is
         # slow/down, rather than failing the whole request with a 500 (this
@@ -300,11 +398,18 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         yield {"type": "replace", "text": answer}
 
     _save_message(conversation_id, "bot", answer, language, sources)
-    yield _done_event(conversation_id, language, sources=sources)
+    yield _done_event(
+        conversation_id,
+        language,
+        sources=sources,
+        intent=detected_intent,
+        related_provisions=related_provisions,
+    )
 
 
 def _done_event(conversation_id: str, language: str, sources: List[Dict] = None,
-                 needs_clarification: bool = False, suggestions: List[str] = None) -> Dict:
+                 needs_clarification: bool = False, suggestions: List[str] = None,
+                 intent: Optional[str] = None, related_provisions: List[Dict] = None) -> Dict:
     return {
         "type": "done",
         "conversation_id": conversation_id,
@@ -312,4 +417,6 @@ def _done_event(conversation_id: str, language: str, sources: List[Dict] = None,
         "sources": sources or [],
         "needs_clarification": needs_clarification,
         "suggestions": suggestions or [],
+        "intent": intent,
+        "related_provisions": related_provisions or [],
     }

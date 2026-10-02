@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import MessageBubble from "./MessageBubble.jsx";
+import { useI18n } from "../i18n.jsx";
 
 export default function ChatWindow({
   messages,
@@ -10,8 +11,10 @@ export default function ChatWindow({
   voiceEnabled,
   onEdit,
   onSelectPrompt,
+  onExport,
 }) {
   const bottomRef = useRef(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -19,40 +22,40 @@ export default function ChatWindow({
 
   const PROMPT_SUGGESTIONS = [
     {
-      title: "Article 19: Freedom of Speech",
+            title: t("p19Title"),
       query: "What is Article 19 of the Constitution of India?",
       icon: "📜",
-      desc: "6 fundamental freedoms & constitutional reasonable restrictions",
+            desc: t("p19Desc"),
     },
     {
-      title: "Article 14: Right to Equality",
+            title: t("p14Title"),
       query: "Explain Article 14 equality before the law",
       icon: "⚖️",
-      desc: "Equal protection of laws & prohibition of discrimination",
+            desc: t("p14Desc"),
     },
     {
-      title: "Article 21: Life & Liberty",
+            title: t("p21Title"),
       query: "What is Article 21 and the right to privacy?",
       icon: "🛡️",
-      desc: "Protection of life and personal liberty, due process",
+            desc: t("p21Desc"),
     },
     {
-      title: "Article 32: Constitutional Remedies",
+            title: t("p32Title"),
       query: "What is Article 32 and writs of habeas corpus and mandamus?",
       icon: "🏛️",
-      desc: "Heart and soul of the Constitution · Supreme Court writs",
+            desc: t("p32Desc"),
     },
     {
-      title: "Article 19 in Tamil (சரத்து 19)",
+            title: t("pTamilTitle"),
       query: "சரத்து 19 பற்றி தமிழில் கூறுங்கள்",
       icon: "🇮🇳",
-      desc: "பேச்சு சுதந்திரம் மற்றும் 6 அடிப்படை உரிமைகள்",
+            desc: t("pTamilDesc"),
     },
     {
-      title: "Article 19 in Telugu (19వ అధికరణం)",
+            title: t("pTeluguTitle"),
       query: "19వ అధికరణం గురించి వివరించండి",
       icon: "🇮🇳",
-      desc: "భారత రాజ్యాంగంలోని వాక్ స్వాతంత్ర్యం మరియు 6 ప్రాథమిక హక్కులు",
+            desc: t("pTeluguDesc"),
     },
   ];
 
@@ -91,11 +94,10 @@ export default function ChatWindow({
           </div>
 
           <h2 className="font-serif text-2xl md:text-3xl font-semibold text-charcoal-800 mb-2">
-            AI Judiciary Legal Assistant
+            {t("welcomeTitle")}
           </h2>
           <p className="text-charcoal-500 text-sm max-w-lg mb-8 leading-relaxed">
-            Instant, authoritative answers grounded in the Constitution of India,
-            Bharatiya Nyaya Sanhita, Central Acts, and Supreme Court jurisprudence.
+            {t("welcomeDescription")}
           </p>
 
           {/* Quick Prompt Cards */}
@@ -121,7 +123,7 @@ export default function ChatWindow({
 
           <div className="mt-8 flex items-center gap-2 text-xs text-charcoal-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-            <span>Multi-script legal NLP active (English, Tamil, Telugu, Hindi & 8 more)</span>
+            <span>{t("nlpActive")}</span>
           </div>
         </div>
       </div>
@@ -141,6 +143,7 @@ export default function ChatWindow({
             isSpeaking={speakingId === i}
             voiceEnabled={voiceEnabled}
             onEdit={onEdit}
+            onExport={onExport}
           />
         ))}
         {/* No separate "typing" indicator needed - the streaming bot message

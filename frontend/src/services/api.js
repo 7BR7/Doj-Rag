@@ -4,20 +4,22 @@ function getToken() {
   return localStorage.getItem("doj_rag_token");
 }
 
-async function handle(res) {
-  if (res.status === 401) {
-    // Session expired/invalid - clear it and force a re-login.
-    localStorage.removeItem("doj_rag_token");
-    localStorage.removeItem("doj_rag_user");
-    window.location.href = "/login";
-    throw new Error("Session expired. Please log in again.");
-  }
+async function handle(res, { authRequired = false } = {}) {
   if (!res.ok) {
     let detail = "Request failed";
     try {
       const data = await res.json();
       detail = data.detail || detail;
     } catch (_) {}
+
+    if (res.status === 401 && authRequired) {
+      // Session expired/invalid - clear it and force a re-login.
+      localStorage.removeItem("doj_rag_token");
+      localStorage.removeItem("doj_rag_user");
+      window.location.href = "/login";
+      throw new Error("Session expired. Please log in again.");
+    }
+
     throw new Error(detail);
   }
   return res.json();
@@ -50,7 +52,7 @@ export async function loginUser({ username, password }) {
 
 export async function fetchCurrentUser() {
   const res = await fetch(`${API_BASE}/api/auth/me`, { headers: authHeaders() });
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 // --- Chat / conversations ---------------------------------------------------
@@ -125,12 +127,20 @@ export async function streamChatMessage({ message, conversationId, language, ove
 
 export async function listConversations() {
   const res = await fetch(`${API_BASE}/api/conversations`, { headers: authHeaders() });
-  return handle(res);
+  return handle(res, { authRequired: true });
+}
+
+export async function createConversation() {
+  const res = await fetch(`${API_BASE}/api/conversations`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handle(res, { authRequired: true });
 }
 
 export async function getConversation(conversationId) {
   const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, { headers: authHeaders() });
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 export async function deleteConversation(conversationId) {
@@ -138,7 +148,7 @@ export async function deleteConversation(conversationId) {
     method: "DELETE",
     headers: authHeaders(),
   });
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 export async function clearConversationMessages(conversationId) {
@@ -146,7 +156,7 @@ export async function clearConversationMessages(conversationId) {
     method: "DELETE",
     headers: authHeaders(),
   });
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 export async function truncateConversation(conversationId, keepCount) {
@@ -154,7 +164,7 @@ export async function truncateConversation(conversationId, keepCount) {
     `${API_BASE}/api/conversations/${conversationId}/truncate?keep_count=${keepCount}`,
     { method: "PUT", headers: authHeaders() }
   );
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 export async function transcribeAudio(blob, language = null) {
@@ -168,7 +178,7 @@ export async function transcribeAudio(blob, language = null) {
     headers: authHeaders(),
     body: form,
   });
-  return handle(res);
+  return handle(res, { authRequired: true });
 }
 
 export async function sendFeedback({ conversationId, messageIndex, rating }) {
@@ -177,5 +187,52 @@ export async function sendFeedback({ conversationId, messageIndex, rating }) {
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ conversation_id: conversationId, message_index: messageIndex, rating }),
   });
+  return handle(res, { authRequired: true });
+}
+
+// --- Export -----------------------------------------------------------------
+
+export async function exportConversation(conversationId, format = "txt") {
+  const res = await fetch(`${API_BASE}/api/export`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ conversation_id: conversationId, format }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || "Export failed");
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const ext = format === "md" ? "md" : "txt";
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `judiciary_ai_${conversationId.slice(0, 8)}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// --- NLP Analysis -----------------------------------------------------------
+
+export async function analyzeNlp(text) {
+  const res = await fetch(`${API_BASE}/api/nlp/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  return handle(res);
+}
+
+export async function getRelatedProvisions(nodeType, identifier) {
+  const res = await fetch(
+    `${API_BASE}/api/nlp/graph/related?node_type=${encodeURIComponent(nodeType)}&identifier=${encodeURIComponent(identifier)}`
+  );
+  return handle(res);
+}
+
+export async function getHealthStatus() {
+  const res = await fetch(`${API_BASE}/api/health`);
   return handle(res);
 }
