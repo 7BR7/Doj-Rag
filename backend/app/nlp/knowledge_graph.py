@@ -290,3 +290,31 @@ def get_graph_summary() -> Dict:
             d.get("relation") for _, _, d in G.edges(data=True) if d.get("relation")
         }),
     }
+
+
+def get_full_graph_data(limit_nodes: int = 150) -> Dict:
+    """Returns formatted node and edge dictionaries for interactive visualization."""
+    G = get_graph()
+    nodes = []
+    edges = []
+    
+    selected_nodes = set(list(G.nodes)[:limit_nodes])
+    for n in selected_nodes:
+        data = G.nodes[n]
+        nodes.append({
+            "id": n,
+            "label": data.get("label", n),
+            "node_type": data.get("node_type", "Provisions"),
+            "identifier": data.get("identifier", ""),
+            "degree": G.degree(n)
+        })
+        
+    for u, v, data in G.edges(data=True):
+        if u in selected_nodes and v in selected_nodes:
+            edges.append({
+                "source": u,
+                "target": v,
+                "relation": data.get("relation", "related_to")
+            })
+            
+    return {"nodes": nodes, "edges": edges}

@@ -33,7 +33,14 @@ export default function RegisterPage() {
       await register(username.trim(), email.trim(), password);
       navigate("/");
     } catch (err) {
-      setError(t("registerError"));
+      const detail = err.message || "";
+      if (detail.includes("username is already taken")) {
+        setError(t("usernameTaken"));
+      } else if (detail.includes("email is already registered")) {
+        setError(t("emailTaken"));
+      } else {
+        setError(t("registerError"));
+      }
     } finally {
       setSubmitting(false);
     }

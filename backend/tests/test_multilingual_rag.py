@@ -68,6 +68,38 @@ def test_multilingual_article_parsing():
     assert q6["query_type"] == "article"
     assert q6["number"] == "21"
 
+    tamil_ordinal = parse_legal_query("19வது சரத்து என்ன?")
+    assert tamil_ordinal["query_type"] == "article"
+    assert tamil_ordinal["number"] == "19"
+    assert tamil_ordinal["document_hint"] == "constitution"
+
+    tamil_ordinal_formal = parse_legal_query("19ஆம் சரத்து பற்றி சொல்லுங்கள்")
+    assert tamil_ordinal_formal["query_type"] == "article"
+    assert tamil_ordinal_formal["number"] == "19"
+
+    tamil_short_form = parse_legal_query("சட்டம் 19")
+    assert tamil_short_form["query_type"] == "article"
+    assert tamil_short_form["number"] == "19"
+    assert tamil_short_form["document_hint"] == "constitution"
+
+    ordinal_article_queries = [
+        "19వ అధికరణం",
+        "19वां अनुच्छेद",
+        "19வது சரத்து",
+        "19ನೇ ವಿಧಿ",
+        "19ാം അനുച്ഛേദം",
+        "19তম অনুচ্ছেদ",
+        "19वा अनुच्छेद",
+        "19મો અનુચ્છેદ",
+        "19ਵਾਂ ਅਨੁਛੇਦ",
+        "19ତମ ଅନୁଚ୍ଛେଦ",
+        "19واں آرٹیکل",
+    ]
+    for ordinal_query in ordinal_article_queries:
+        ordinal_intent = parse_legal_query(ordinal_query)
+        assert ordinal_intent["query_type"] == "article", (ordinal_query, ordinal_intent)
+        assert ordinal_intent["number"] == "19", (ordinal_query, ordinal_intent)
+
     # Kannada
     q7 = parse_legal_query("ವಿಧಿ 21 ಎಂದರೇನು?")
     assert q7["query_type"] == "article"
@@ -155,6 +187,28 @@ def test_constitution_parser_accepts_wrapped_article_titles():
     article_47 = next(article for article in articles if article["number"] == "47")
     assert "improve public health" in article_47["title"]
     assert "The State shall regard" in article_47["body"]
+
+
+def test_constitution_parser_ignores_toc_and_keeps_article_bodies_separate():
+    pages = [
+        "CONTENTS\nARTICLES\n"
+        "1. Name and territory of the Union.\n"
+        "2. Admission or establishment of new States.\n"
+        "3. Formation of new States.\n"
+        "PART I\nTHE UNION AND ITS TERRITORY\n"
+        "1. Name and territory of the Union.—India, that is Bharat, shall be a Union of States.\n"
+        "(2) The States and the territories thereof shall be as specified in the First Schedule.\n"
+        "2. Admission or establishment of new States.—Parliament may by law admit into the Union.\n"
+        "3. Formation of new States.—Parliament may by law form a new State."
+    ]
+    articles = parse_constitution("constitution", "Constitution", pages, set())
+    article_1 = next(article for article in articles if article["number"] == "1")
+    article_2 = next(article for article in articles if article["number"] == "2")
+    assert article_1["title"] == "Name and territory of the Union"
+    assert "India, that is Bharat" in article_1["body"]
+    assert "Admission or establishment of new States" not in article_1["title"]
+    assert "Parliament may by law admit" not in article_1["body"]
+    assert "Parliament may by law admit" in article_2["body"]
 
 
 def test_legal_query_routing():
@@ -276,6 +330,83 @@ def test_general_chat_handles_unavailable_llm_in_tamil():
     assert events[-1]["type"] == "done"
 
 
+def test_document_summary_uses_only_selected_document_chunks():
+    import asyncio
+    from app.services import chat_service
+
+    class FakeCursor(list):
+        def sort(self, *args, **kwargs):
+            return self
+
+    documents = {
+        "bns": {"document_id": "bns", "document_name": "Bharatiya Nyaya Sanhita"},
+        "bsa": {"document_id": "bsa", "document_name": "Bharatiya Sakshya Adhiniyam"},
+    }
+    chunks = [
+        {"document_id": "bns", "document_name": "BNS", "text": "BNS sample content", "source_type": "actual_law", "child_index": 0, "section": "1", "chunk_id": "bns-1"},
+        {"document_id": "bsa", "document_name": "BSA", "text": "BSA unrelated content", "source_type": "actual_law", "child_index": 0, "section": "1", "chunk_id": "bsa-1"},
+    ]
+
+    class FakeDocuments:
+        def find_one(self, query):
+            return documents.get(query["document_id"])
+
+    class FakeChunks:
+        def find(self, query):
+            return FakeCursor([chunk for chunk in chunks if chunk["document_id"] == query["document_id"]])
+
+    observed = {}
+
+    async def fake_answer(message, selected_chunks, language, history):
+        observed["message"] = message
+        observed["chunks"] = selected_chunks
+        observed["language"] = language
+        yield "இந்த ஆவணம் குற்றங்களையும் அவற்றுக்கான தண்டனைகளையும் விளக்குகிறது."
+
+    originals = {
+        "create": chat_service._get_or_create_conversation,
+        "history": chat_service._recent_history,
+        "save": chat_service._save_message,
+        "documents": chat_service.documents_col,
+        "chunks": chat_service.chunks_col,
+        "answer": chat_service.llm.stream_answer,
+    }
+    saved = []
+    chat_service._get_or_create_conversation = lambda *args: "summary-conversation"
+    chat_service._recent_history = lambda *args: []
+    chat_service._save_message = lambda *args: saved.append(args)
+    chat_service.documents_col = lambda: FakeDocuments()
+    chat_service.chunks_col = lambda: FakeChunks()
+    chat_service.llm.stream_answer = fake_answer
+
+    async def collect_events():
+        return [event async for event in chat_service.stream_chat_message(
+            message="இந்த ஆவணத்தை சுருக்கமாக கூறு",
+            conversation_id="summary-conversation",
+            language="Auto-Detect",
+            user_id="test-user",
+            document_id="bns",
+        )]
+
+    try:
+        events = asyncio.run(collect_events())
+    finally:
+        chat_service._get_or_create_conversation = originals["create"]
+        chat_service._recent_history = originals["history"]
+        chat_service._save_message = originals["save"]
+        chat_service.documents_col = originals["documents"]
+        chat_service.chunks_col = originals["chunks"]
+        chat_service.llm.stream_answer = originals["answer"]
+
+    assert observed["language"] == "Tamil"
+    assert len(observed["chunks"]) == 1
+    assert observed["chunks"][0]["document_id"] == "bns"
+    assert "Summarize the selected document" in observed["message"]
+    assert events[0]["type"] == "chunk"
+    assert events[-1]["type"] == "done"
+    assert saved[-1][2] == "இந்த ஆவணம் குற்றங்களையும் அவற்றுக்கான தண்டனைகளையும் விளக்குகிறது."
+
+
 def test_first_message_names_only_an_empty_conversation():
     from app.services import chat_service
 
@@ -381,14 +512,15 @@ def test_stream_translation_yields_and_caches_target_language():
     assert stream.calls == 1
 
 
-def test_exact_tamil_answer_streams_translation_chunks():
+def test_exact_tamil_answer_summarizes_only_requested_provision():
     import asyncio
-    from app.services import chat_service
+    from app.services import chat_service, llm
 
-    async def fake_translation(text, language):
+    async def fake_answer(message, chunks, language, history):
         assert language == "Tamil"
-        yield "தமிழ் முதல் பகுதி "
-        yield "தமிழ் இரண்டாம் பகுதி"
+        assert len(chunks) == 1
+        assert chunks[0]["article"] == "21"
+        yield "சரத்து 21 உயிர் மற்றும் தனிநபர் சுதந்திரத்தைப் பாதுகாக்கிறது."
 
     chunk = {
         "article": "21",
@@ -407,7 +539,7 @@ def test_exact_tamil_answer_streams_translation_chunks():
         "history": chat_service._recent_history,
         "save": chat_service._save_message,
         "retrieve": chat_service.retrieve,
-        "translate": chat_service.stream_translate_text,
+        "answer": chat_service.llm.stream_answer,
     }
     saved_messages = []
     chat_service._get_or_create_conversation = lambda *args: "test-conversation"
@@ -415,10 +547,10 @@ def test_exact_tamil_answer_streams_translation_chunks():
     chat_service._save_message = lambda *args: saved_messages.append(args)
     chat_service.retrieve = lambda message: {
         "mode": "exact",
-        "chunks": [chunk],
+        "chunks": [chunk, {**chunk, "article": "22", "chunk_id": "article-22"}],
         "intent": {"query_type": "article", "number": "21"},
     }
-    chat_service.stream_translate_text = fake_translation
+    chat_service.llm.stream_answer = fake_answer
 
     async def collect_events():
         return [event async for event in chat_service.stream_chat_message(
@@ -435,14 +567,13 @@ def test_exact_tamil_answer_streams_translation_chunks():
         chat_service._recent_history = originals["history"]
         chat_service._save_message = originals["save"]
         chat_service.retrieve = originals["retrieve"]
-        chat_service.stream_translate_text = originals["translate"]
+        chat_service.llm.stream_answer = originals["answer"]
 
     assert [event["text"] for event in events if event["type"] == "chunk"] == [
-        "தமிழ் முதல் பகுதி ", "தமிழ் இரண்டாம் பகுதி"
+        "சரத்து 21 உயிர் மற்றும் தனிநபர் சுதந்திரத்தைப் பாதுகாக்கிறது."
     ]
-    assert any(event["type"] == "phase" and event["phase"] == "translating" for event in events)
     assert events[-1]["type"] == "done"
-    assert saved_messages[-1][2] == "தமிழ் முதல் பகுதி தமிழ் இரண்டாம் பகுதி"
+    assert saved_messages[-1][2] == "சரத்து 21 உயிர் மற்றும் தனிநபர் சுதந்திரத்தைப் பாதுகாக்கிறது."
 
 
 def test_exact_retrieval_with_multilingual_queries():
@@ -472,6 +603,18 @@ def test_exact_retrieval_with_multilingual_queries():
             for chunk in result["chunks"]
         )
 
+    tamil_article_19 = retrieve("19வது சரத்து என்ன?")
+    assert tamil_article_19["mode"] == "exact"
+    assert any(
+        chunk.get("document_id") == "constitution" and chunk.get("article") == "19"
+        for chunk in tamil_article_19["chunks"]
+    )
+
+    tamil_law_article_19 = retrieve("சட்டம் 19")
+    assert tamil_law_article_19["mode"] == "exact"
+    assert all(chunk.get("document_id") == "constitution" for chunk in tamil_law_article_19["chunks"])
+    assert any(chunk.get("article") == "19" for chunk in tamil_law_article_19["chunks"])
+
 
 if __name__ == "__main__":
     tests = [
@@ -480,6 +623,7 @@ if __name__ == "__main__":
         test_multilingual_section_and_rule_parsing,
         test_bharatiya_statutes_route_and_extract_plain_section_headings,
         test_constitution_parser_accepts_wrapped_article_titles,
+        test_constitution_parser_ignores_toc_and_keeps_article_bodies_separate,
         test_legal_query_routing,
         test_script_and_language_detection,
         test_language_resolution_dynamics,
@@ -488,10 +632,11 @@ if __name__ == "__main__":
         test_llm_unavailable_message_is_localized,
         test_translation_fallback_stays_in_requested_language,
         test_general_chat_handles_unavailable_llm_in_tamil,
+        test_document_summary_uses_only_selected_document_chunks,
         test_first_message_names_only_an_empty_conversation,
         test_raw_llm_stream_yields_incremental_translation_chunks,
         test_stream_translation_yields_and_caches_target_language,
-        test_exact_tamil_answer_streams_translation_chunks,
+        test_exact_tamil_answer_summarizes_only_requested_provision,
         test_exact_retrieval_with_multilingual_queries,
     ]
     passed = 0

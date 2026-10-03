@@ -18,7 +18,7 @@ import re
 import uuid
 from typing import Optional, List, Dict, AsyncGenerator
 from app.config import settings
-from app.database.mongodb import conversations_col, messages_col, now
+from app.database.mongodb import conversations_col, messages_col, documents_col, chunks_col, now
 from app.rag.retriever import retrieve
 from app.services import llm
 from app.services.language import (
@@ -113,7 +113,25 @@ def _format_direct_answer(chunks: List[Dict]) -> str:
     without adding correctness. (General/hybrid questions still use the LLM,
     since there's no single authoritative passage to just return.)
     """
-    first = chunks[0]
+    unique_chunks = []
+    seen_chunks = set()
+    for chunk in chunks:
+        key = (
+            chunk.get("document_id"),
+            chunk.get("article"),
+            chunk.get("section"),
+            chunk.get("rule"),
+            chunk.get("child_index"),
+            chunk.get("text"),
+        )
+        if key not in seen_chunks:
+            seen_chunks.add(key)
+            unique_chunks.append(chunk)
+
+    if not unique_chunks:
+        return ""
+
+    first = unique_chunks[0]
     label_bits = []
     if first.get("article"):
         label_bits.append(f"Article {first['article']}")
@@ -125,7 +143,7 @@ def _format_direct_answer(chunks: List[Dict]) -> str:
         label_bits.append(first["title"])
     heading = " — ".join(label_bits) if label_bits else (first.get("document_name") or "")
 
-    body = " ".join(_clean_legal_text(c["text"]) for c in chunks)
+    body = " ".join(_clean_legal_text(c["text"]) for c in unique_chunks)
     return f"{heading}\n\n{body}" if heading else body
 
 
@@ -152,7 +170,8 @@ def _chunks_to_sources(chunks: List[Dict]) -> List[Dict]:
 
 
 async def stream_chat_message(message: str, conversation_id: Optional[str], language: str,
-                               user_id: str, override_language: bool = False) -> AsyncGenerator[Dict, None]:
+                               user_id: str, override_language: bool = False,
+                               document_id: Optional[str] = None) -> AsyncGenerator[Dict, None]:
     """
     Yields event dicts as the answer is produced:
       {"type": "chunk", "text": "..."}        - append this text to the answer
@@ -196,6 +215,62 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         yield _done_event(conversation_id, language)
         return
 
+    if document_id:
+        document = documents_col().find_one({"document_id": document_id})
+        if not document:
+            answer = get_message("no_context_template", language)
+            _save_message(conversation_id, "bot", answer, language, [])
+            yield {"type": "chunk", "text": answer}
+            yield _done_event(conversation_id, language)
+            return
+
+        document_chunks = list(
+            chunks_col()
+            .find({"document_id": document_id, "source_type": "actual_law", "child_index": 0})
+            .sort("page_start", 1)
+        )
+        if not document_chunks:
+            document_chunks = list(
+                chunks_col().find({"document_id": document_id}).sort("page_start", 1).limit(10)
+            )
+        if len(document_chunks) > 8:
+            last_index = len(document_chunks) - 1
+            sample_indices = {round(i * last_index / 7) for i in range(8)}
+            document_chunks = [chunk for i, chunk in enumerate(document_chunks) if i in sample_indices]
+        for chunk in document_chunks:
+            chunk["text"] = chunk.get("text", "")[:600]
+
+        if not document_chunks:
+            answer = get_message("no_context_template", language)
+            _save_message(conversation_id, "bot", answer, language, [])
+            yield {"type": "chunk", "text": answer}
+            yield _done_event(conversation_id, language)
+            return
+
+        summary_request = (
+            f"Summarize the selected document '{document.get('document_name', document_id)}' "
+            "for a non-lawyer. Explain its purpose and the main topics or procedures. "
+            "Use only the supplied excerpts; say briefly if the excerpts do not cover the full document."
+        )
+        summary_parts = []
+        try:
+            async for delta in llm.stream_answer(summary_request, document_chunks, language, []):
+                summary_parts.append(delta)
+                yield {"type": "chunk", "text": delta}
+        except (llm.OllamaUnavailableError, llm.LLMUnavailableError) as e:
+            logger.error("Document summary unavailable: %s", e)
+            answer = get_message("llm_unavailable", language)
+            _save_message(conversation_id, "bot", answer, language, [])
+            yield {"type": "replace", "text": answer}
+            yield _done_event(conversation_id, language)
+            return
+
+        answer = "".join(summary_parts).strip()
+        sources = _chunks_to_sources(document_chunks)
+        _save_message(conversation_id, "bot", answer, language, sources)
+        yield _done_event(conversation_id, language, sources=sources)
+        return
+
     if not is_legal_query(message):
         parts = []
         try:
@@ -217,14 +292,21 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     result = retrieve(message)
     mode = result["mode"]
 
-    # Extract NLP intent & knowledge graph related provisions for enriched UI response
+    # Extract NLP intent & query classification
     detected_intent = None
+    query_confidence = 1.0
     related_provisions = []
     try:
-        from app.nlp.nlp_pipeline import detect_intent
-        detected_intent = detect_intent(message)
+        from app.nlp.ml_intent import classify_intent
+        intent_res = classify_intent(message)
+        detected_intent = intent_res.get("intent")
+        query_confidence = intent_res.get("confidence", 1.0)
     except Exception:
-        pass
+        try:
+            from app.nlp.nlp_pipeline import detect_intent
+            detected_intent = detect_intent(message)
+        except Exception:
+            pass
 
     try:
         from app.nlp.knowledge_graph import get_related_provisions
@@ -279,6 +361,21 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
 
     chunks = result["chunks"]
 
+    if mode in ("exact", "suggested"):
+        intent = result.get("intent", {})
+        number_field = {
+            "article": "article",
+            "section": "section",
+            "rule": "rule",
+        }.get(intent.get("query_type"))
+        if number_field:
+            primary_chunks = [
+                chunk for chunk in chunks
+                if str(chunk.get(number_field)) == str(intent.get("number"))
+            ]
+            if primary_chunks:
+                chunks = primary_chunks
+
     if not chunks:
         answer = get_message("no_context_template", language)
         _save_message(conversation_id, "bot", answer, language, [])
@@ -289,9 +386,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     sources = _chunks_to_sources(chunks)
 
     if mode in ("exact", "suggested"):
-        # --- Fast path: exact/near-exact Article/Section/Rule match ---------
-        # Already near-instant (no open-ended generation) - translation (if
-        # needed) streams into the chat and is cached after completion.
+        # Keep exact legal context, but answer in a short conversational form.
         source_answer = _format_direct_answer(chunks)
         prefix = ""
         if mode == "suggested":
@@ -302,29 +397,62 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             )
             yield {"type": "chunk", "text": prefix}
 
-        if language != "English":
-            yield {"type": "phase", "phase": "translating"}
-            translated_parts = []
-            try:
-                async for delta in stream_translate_text(source_answer, language):
-                    translated_parts.append(delta)
-                    yield {"type": "chunk", "text": delta}
-                answer = "".join(translated_parts).strip()
-            except TranslationUnavailableError:
-                answer = get_message("translation_unavailable", language)
+        answer_parts = []
+        try:
+            async for delta in llm.stream_answer(message, chunks, language, history):
+                answer_parts.append(delta)
+                yield {"type": "chunk", "text": delta}
+            answer = "".join(answer_parts).strip()
+            if not answer:
+                answer = source_answer
+                if language != "English":
+                    answer = translate_text(answer, language)
                 yield {"type": "replace", "text": answer}
-        else:
+            elif language != "English":
+                from app.services.translator import _has_target_script
+                if not _has_target_script(answer, language):
+                    logger.info("Exact-mode answer lacked %s script; translating...", language)
+                    yield {"type": "phase", "phase": "translating"}
+                    translated = translate_text(answer, language)
+                    if translated and _has_target_script(translated, language):
+                        answer = translated
+                        yield {"type": "replace", "text": answer}
+        except (llm.OllamaUnavailableError, llm.LLMUnavailableError):
+            logger.warning("Concise legal answer generation unavailable; returning the provision text.")
             answer = source_answer
+            if language != "English":
+                translated_parts = []
+                try:
+                    async for delta in stream_translate_text(source_answer, language):
+                        translated_parts.append(delta)
+                        yield {"type": "chunk", "text": delta}
+                    answer = "".join(translated_parts).strip()
+                except TranslationUnavailableError:
+                    answer = get_message("translation_unavailable", language)
+            yield {"type": "replace", "text": answer}
         answer = prefix + answer
+        if prefix and answer_parts:
+            yield {"type": "replace", "text": answer}
         _save_message(conversation_id, "bot", answer, language, sources)
-        if language == "English":
-            yield {"type": "chunk", "text": answer}
+            
+        # Verify citations and explainability
+        citation_info = {}
+        why_answer = ""
+        try:
+            from app.rag.citation_verifier import verify_answer_citations
+            citation_info = verify_answer_citations(answer, chunks)
+            why_answer = citation_info.get("why_this_answer", "")
+        except Exception:
+            pass
+
         yield _done_event(
             conversation_id,
             language,
             sources=sources,
             intent=detected_intent,
             related_provisions=related_provisions,
+            citation_verification=citation_info,
+            why_this_answer=why_answer
         )
         return
 
@@ -350,6 +478,17 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
                 parts.append(delta)
                 yield {"type": "chunk", "text": delta}
             answer = "".join(parts).strip()
+            # If the user requested a non-English language but the model returned English/untranslated text,
+            # translate it cleanly to guarantee a 100% complete response in that language
+            if language != "English" and answer:
+                from app.services.translator import _has_target_script
+                if not _has_target_script(answer, language):
+                    logger.info("Single-pass output for %s lacked target script; translating answer...", language)
+                    yield {"type": "phase", "phase": "translating"}
+                    translated_answer = translate_text(answer, language)
+                    if translated_answer and _has_target_script(translated_answer, language):
+                        answer = translated_answer
+                        yield {"type": "replace", "text": answer}
         except (llm.OllamaUnavailableError, llm.LLMUnavailableError) as e:
             logger.error(str(e))
             top = chunks[0]
@@ -360,6 +499,16 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             answer = translate_text(answer, language)
             yield {"type": "replace", "text": answer}
 
+        # Verify citations and explainability
+        citation_info = {}
+        why_answer = ""
+        try:
+            from app.rag.citation_verifier import verify_answer_citations
+            citation_info = verify_answer_citations(answer, chunks)
+            why_answer = citation_info.get("why_this_answer", "")
+        except Exception:
+            pass
+
         _save_message(conversation_id, "bot", answer, language, sources)
         yield _done_event(
             conversation_id,
@@ -367,6 +516,8 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             sources=sources,
             intent=detected_intent,
             related_provisions=related_provisions,
+            citation_verification=citation_info,
+            why_this_answer=why_answer
         )
         return
 
@@ -409,7 +560,8 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
 
 def _done_event(conversation_id: str, language: str, sources: List[Dict] = None,
                  needs_clarification: bool = False, suggestions: List[str] = None,
-                 intent: Optional[str] = None, related_provisions: List[Dict] = None) -> Dict:
+                 intent: Optional[str] = None, related_provisions: List[Dict] = None,
+                 citation_verification: Optional[Dict] = None, why_this_answer: Optional[str] = None) -> Dict:
     return {
         "type": "done",
         "conversation_id": conversation_id,
@@ -419,4 +571,6 @@ def _done_event(conversation_id: str, language: str, sources: List[Dict] = None,
         "suggestions": suggestions or [],
         "intent": intent,
         "related_provisions": related_provisions or [],
+        "citation_verification": citation_verification or {},
+        "why_this_answer": why_this_answer or ""
     }

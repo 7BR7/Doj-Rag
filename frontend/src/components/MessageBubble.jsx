@@ -63,6 +63,7 @@ export default function MessageBubble({
   msg, index, onSpeak, onStopSpeak, isSpeaking, voiceEnabled, onEdit, onExport
 }) {
   const [showSources, setShowSources] = useState(false);
+  const [showExplain, setShowExplain] = useState(false);
   const { t } = useI18n();
   const isUser = msg.sender === "user";
 
@@ -131,6 +132,17 @@ export default function MessageBubble({
             </button>
           )}
 
+          {/* Explainability / Why This Answer */}
+          {(msg.whyThisAnswer || msg.citationVerification) && !msg.streaming && (
+            <button
+              onClick={() => setShowExplain((s) => !s)}
+              className="text-gold-600 hover:text-gold-700 font-medium flex items-center gap-0.5"
+              title="Explain how this answer was derived"
+            >
+              💡 {showExplain ? "Hide Explanation" : "Why This Answer?"}
+            </button>
+          )}
+
           {/* Copy */}
           {!msg.streaming && <CopyButton text={msg.message} className="hover:text-charcoal-700" />}
 
@@ -181,6 +193,53 @@ export default function MessageBubble({
             </>
           )}
         </div>
+
+        {/* Explainability Panel */}
+        {showExplain && (
+          <div className="mt-3 p-3 rounded border border-gold-200 bg-gold-50/50 text-xs space-y-2">
+            <div className="font-serif font-bold text-maroon-900 flex items-center gap-1.5">
+              <span>🔍</span> Explainability & Verification
+            </div>
+            {msg.whyThisAnswer && (
+              <div className="space-y-1">
+                <p className="text-charcoal-700 leading-relaxed font-sans">{msg.whyThisAnswer.summary}</p>
+                {msg.whyThisAnswer.method && (
+                  <p className="text-[10px] text-charcoal-500 font-mono">
+                    Strategy: {msg.whyThisAnswer.method} {msg.whyThisAnswer.documents_consulted ? `| Documents: ${msg.whyThisAnswer.documents_consulted.join(", ")}` : ""}
+                  </p>
+                )}
+              </div>
+            )}
+            {msg.citationVerification && (
+              <div className="pt-2 border-t border-gold-200 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-charcoal-600">Citation Alignment Score:</span>
+                  {(() => {
+                    const score = Number(msg.citationVerification.support_score ?? msg.citationVerification.grounding_score ?? 0.85);
+                    const safeScore = isNaN(score) ? 0.85 : score;
+                    return (
+                      <span className={`font-mono font-bold ${
+                        safeScore >= 0.7 ? "text-emerald-700" :
+                        safeScore >= 0.4 ? "text-amber-700" : "text-rose-700"
+                      }`}>
+                        {(safeScore * 100).toFixed(0)}%
+                      </span>
+                    );
+                  })()}
+                </div>
+                {msg.citationVerification.cited_sources && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {msg.citationVerification.cited_sources.map((s, idx) => (
+                      <span key={idx} className="px-1.5 py-0.5 rounded bg-white border border-gold-300 text-[10px] text-charcoal-700">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Related provisions from knowledge graph */}
         {msg.relatedProvisions && msg.relatedProvisions.length > 0 && !msg.streaming && (

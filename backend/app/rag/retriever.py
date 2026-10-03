@@ -156,25 +156,46 @@ def hybrid_retrieve(message: str, top_k: int = None) -> List[Dict]:
 
     bm25_hits = bm25_search.search(search_message, top_k=settings.TOP_K_BM25)
     query_vec = embeddings.embed_query(search_message)
-    faiss_hits = vectorstore.search(query_vec, top_k=settings.TOP_K_FAISS)
+    
+    # Try ChromaDB first as primary vector database; fall back to FAISS if needed
+    chroma_hits = []
+    try:
+        from app.rag import chroma_store
+        chroma_hits = chroma_store.search(query_vec, top_k=settings.TOP_K_FAISS)
+    except Exception as e:
+        logger.debug(f"ChromaDB search fallback to FAISS: {e}")
+
+    if not chroma_hits:
+        try:
+            chroma_hits = vectorstore.search(query_vec, top_k=settings.TOP_K_FAISS)
+        except Exception:
+            chroma_hits = []
 
     # Reciprocal rank fusion (k=60 is the standard constant)
     k = 60
     scores: Dict[str, float] = {}
     for rank, (cid, _) in enumerate(bm25_hits):
         scores[cid] = scores.get(cid, 0) + 1.0 / (rank + k)
-    for rank, (cid, _) in enumerate(faiss_hits):
+    for rank, (cid, _) in enumerate(chroma_hits):
         scores[cid] = scores.get(cid, 0) + 1.0 / (rank + k)
 
     ranked_ids = [cid for cid, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
-    top_ids = ranked_ids[:top_k]
+    candidate_ids = ranked_ids[:max(top_k * 2, 10)]
 
-    if not top_ids:
+    if not candidate_ids:
         return []
 
-    docs = list(chunks_col().find({"chunk_id": {"$in": top_ids}}))
+    docs = list(chunks_col().find({"chunk_id": {"$in": candidate_ids}}))
     docs_by_id = {d["chunk_id"]: d for d in docs}
-    return [docs_by_id[cid] for cid in top_ids if cid in docs_by_id]
+    candidate_chunks = [docs_by_id[cid] for cid in candidate_ids if cid in docs_by_id]
+
+    # Apply advanced Reranker
+    try:
+        from app.rag.reranker import rerank_chunks
+        return rerank_chunks(message, candidate_chunks, top_k=top_k)
+    except Exception as e:
+        logger.warning(f"Reranking fallback to raw RRF order: {e}")
+        return candidate_chunks[:top_k]
 
 
 def _multi_article_retrieve(query_numbers: List[str], query_type: str) -> List[Dict]:
@@ -202,12 +223,25 @@ def retrieve(message: str) -> Dict:
       - Query decomposition for multi-article queries
       - NLP-based query normalization for hybrid retrieval
     """
+    # Multilingual query harmonization: If query is in native script, translate to English for retrieval
+    clean_message = message
+    try:
+        from app.services.language import detect_script_language
+        script_lang = detect_script_language(message)
+        if script_lang != "English":
+            from app.nlp.translation_service import translate_query_to_english
+            translated_query = translate_query_to_english(message, script_lang)
+            if translated_query and translated_query.strip():
+                clean_message = f"{message} {translated_query}"
+    except Exception as e:
+        logger.debug("Query translation skipped: %s", e)
+
     # Try query decomposition first — if user asks about multiple articles,
     # retrieve each independently then merge
     try:
         from app.nlp.nlp_pipeline import decompose_query, extract_legal_entities
-        sub_queries = decompose_query(message)
-        entities = extract_legal_entities(message)
+        sub_queries = decompose_query(clean_message)
+        entities = extract_legal_entities(clean_message)
 
         # If multiple articles detected in one query, do multi-retrieval
         if len(entities.get("articles", [])) > 1:
@@ -224,7 +258,12 @@ def retrieve(message: str) -> Dict:
     except Exception as e:
         logger.debug("NLP decomposition skipped: %s", e)
 
-    exact_result = retrieve_exact_or_suggest(message)
+    exact_result = retrieve_exact_or_suggest(clean_message)
+    if exact_result.get("mode") not in ("exact", "suggested"):
+        # Also try the raw user message in case exact regex matched native script directly
+        alt_exact = retrieve_exact_or_suggest(message)
+        if alt_exact.get("mode") in ("exact", "suggested"):
+            exact_result = alt_exact
 
     if exact_result["mode"] in ("exact", "suggested"):
         chunks = exact_result["chunks"]
@@ -268,6 +307,6 @@ def retrieve(message: str) -> Dict:
             "chunks": [],
         }
 
-    # General question -> hybrid retrieval
-    chunks = hybrid_retrieve(message)
+    # General question -> hybrid retrieval using harmonized search terms
+    chunks = hybrid_retrieve(clean_message)
     return {"mode": "hybrid", "chunks": chunks, "intent": exact_result["intent"]}

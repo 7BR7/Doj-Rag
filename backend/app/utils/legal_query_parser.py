@@ -37,7 +37,7 @@ ARTICLE_KW = (
     r"(?:article|art\.?|"
     r"ఆర్టికల్|ఆర్టికల్స్|అధికరణం|అధికరణ|నిబంధన|విధి|"
     r"अनुच्छेद|"
-    r"சரத்து|உறுப்பு|"
+    r"சரத்து|உறுப்பு|சட்டம்|"
     r"ವಿಧಿ|ಆರ್ಟಿಕಲ್|ಪರಿಚ್ಛೇದ|ಅನುಚ್ಛೇದ|"
     r"അനുച്ഛേദം|"
     r"অনুচ্ছেদ|"
@@ -129,10 +129,16 @@ LEGAL_TOPIC_RE = re.compile(
 # Patterns: keyword followed by number (e.g. "Article 21", "ఆర్టికల్ 21", "అధికరణ 21A")
 ARTICLE_PRE_RE = re.compile(rf"{ARTICLE_KW}\s*[-:–—]?\s*(\d{{1,3}}[A-Za-z]?)\b", re.IGNORECASE)
 # Patterns: number followed by keyword (e.g. "21వ అధికరణ", "21st article", "21वां अनुच्छेद")
-ARTICLE_POST_RE = re.compile(rf"\b(\d{{1,3}}[A-Za-z]?)(?:st|nd|rd|th|వ|va|वां|वें)?\s*{ARTICLE_KW}", re.IGNORECASE)
+ARTICLE_POST_RE = re.compile(
+    rf"\b(\d{{1,3}}[A-Za-z]?)(?:st|nd|rd|th|వ|va|वां|वें|वा|वे|आवा?ँ?|आवां|तम|वा|वीं|ನೇ|ನೆ|ാം|താം|তম|তম|তম|ମ|ତମ|ତମ|ਵਾਂ|ਵੀਂ|ਵਾਂ|واں|واں|મો|મી|મું|ஆவது|வது|ஆம்)?\s*{ARTICLE_KW}",
+    re.IGNORECASE,
+)
 
 SECTION_PRE_RE = re.compile(rf"{SECTION_KW}\s*[-:–—]?\s*(\d{{1,4}}[A-Za-z]?)\b", re.IGNORECASE)
-SECTION_POST_RE = re.compile(rf"\b(\d{{1,4}}[A-Za-z]?)(?:st|nd|rd|th|వ|va|वां|वें|வது|ஆவது)?\s*{SECTION_KW}", re.IGNORECASE)
+SECTION_POST_RE = re.compile(
+    rf"\b(\d{{1,4}}[A-Za-z]?)(?:st|nd|rd|th|వ|va|वां|वें|वा|वे|आवा?ँ?|आवां|तम|वीं|ನೇ|ನೆ|ാം|താം|তম|তম|ତମ|ਵਾਂ|ਵੀਂ|واں|મો|મી|મું|ஆவது|வது|ஆம்)?\s*{SECTION_KW}",
+    re.IGNORECASE,
+)
 
 RULE_PRE_RE = re.compile(rf"{RULE_KW}\s*[-:–—]?\s*(\d{{1,4}}[A-Za-z]?)\b", re.IGNORECASE)
 RULE_POST_RE = re.compile(rf"\b(\d{{1,4}}[A-Za-z]?)(?:st|nd|rd|th|వ|va|वां|वें)?\s*{RULE_KW}", re.IGNORECASE)

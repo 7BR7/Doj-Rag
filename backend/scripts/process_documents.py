@@ -52,6 +52,7 @@ def process_all():
         sys.exit(1)
 
     all_chunks = []
+    processed_document_ids = []
 
     for pdf_path in pdf_paths:
         filename = os.path.basename(pdf_path)
@@ -70,6 +71,11 @@ def process_all():
 
         chunks = build_chunks(units)
         logger.info(f"  -> produced {len(chunks)} chunks")
+
+        # Replace old parser output so repeated processing cannot accumulate
+        # duplicate chunks for the same PDF.
+        chunks_col().delete_many({"document_id": document["document_id"]})
+        processed_document_ids.append(document["document_id"])
 
         documents_col().update_one(
             {"document_id": document["document_id"]},
@@ -104,7 +110,18 @@ def process_all():
     vectorstore.build_index(embeddings, chunk_ids)
     bm25_search.build_bm25(texts, chunk_ids)
 
-    logger.info("Done. FAISS + BM25 indexes built and saved to storage/.")
+    # Populate ChromaDB as the primary vector store
+    try:
+        from app.rag import chroma_store
+        logger.info("Indexing chunks into ChromaDB persistent storage...")
+        for document_id in processed_document_ids:
+            chroma_store.delete_document_chunks(document_id)
+        chroma_store.add_chunks_to_chroma(all_chunks, embeddings.tolist())
+        logger.info(f"Successfully indexed {len(all_chunks)} chunks into ChromaDB.")
+    except Exception as e:
+        logger.error(f"Failed to populate ChromaDB: {e}")
+
+    logger.info("Done. ChromaDB + FAISS + BM25 indexes built and saved to storage/.")
     logger.info("You can now start the backend: uvicorn app.main:app --reload")
 
 

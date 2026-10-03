@@ -31,6 +31,7 @@ async def chat(req: ChatRequest, request: Request, current_user: dict = Depends(
             async for event in stream_chat_message(
                 message=req.message,
                 conversation_id=req.conversation_id,
+                document_id=req.document_id,
                 language=req.language,
                 override_language=req.override_language,
                 user_id=current_user["user_id"],

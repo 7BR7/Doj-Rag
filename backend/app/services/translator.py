@@ -1,16 +1,9 @@
 """
-Translates arbitrary legal text (Article/Section/Rule bodies, which only
-exist in the source PDF's language - normally English) into the user's
-selected language, using the local Ollama LLM.
-
-This is what makes "if Tamil is selected, the answer must be in Tamil"
-actually true for the fast, no-general-generation exact-match path - before
-this existed, exact-match answers were always returned in the source
-document's language regardless of the language selector, because that path
-was deliberately built to skip the LLM for speed. Translation only runs when
-the selected language differs from English, and results are cached in
-MongoDB per (chunk signature, language) so the same Article is never
-re-translated on every request.
+Translates arbitrary legal text into the user's selected language using
+a robust multi-engine translation strategy:
+1. Cached translations from MongoDB (instant response).
+2. Deep Translation Service (LLM Legal Translation + deep_translator fallback).
+3. Script verification to prevent silent English/corrupted fallbacks.
 """
 import hashlib
 import logging
@@ -26,11 +19,11 @@ logger = logging.getLogger("doj_rag.translator")
 class TranslationUnavailableError(Exception):
     pass
 
-TRANSLATE_SYSTEM_PROMPT = """You are a precise legal-document translator.
-Translate the COMPLETE English legal text into {language}. Preserve every
-sentence, example, condition, name, and Article/Section number. Use the correct
-legal meaning; do not summarize, omit text, or add commentary. Output only the
-full translation."""
+
+TRANSLATE_SYSTEM_PROMPT = """You are an expert Indian legal translator.
+Translate the following legal text faithfully and accurately into {language}.
+Preserve all Article/Section/Rule numbers, named statutes, and legal meaning.
+Output ONLY the clean, translated text in the authentic script of {language} without any commentary, explanation, or introduction."""
 
 
 def _has_target_script(text: str, language: str) -> bool:
@@ -38,6 +31,24 @@ def _has_target_script(text: str, language: str) -> bool:
         return True
     if language in ("Hindi", "Marathi"):
         return any("\u0900" <= char <= "\u097f" for char in text)
+    if language == "Tamil":
+        return any("\u0b80" <= char <= "\u0bff" for char in text)
+    if language == "Telugu":
+        return any("\u0c00" <= char <= "\u0c7f" for char in text)
+    if language == "Kannada":
+        return any("\u0c80" <= char <= "\u0cff" for char in text)
+    if language == "Malayalam":
+        return any("\u0d00" <= char <= "\u0d7f" for char in text)
+    if language == "Bengali":
+        return any("\u0980" <= char <= "\u09ff" for char in text)
+    if language == "Gujarati":
+        return any("\u0a80" <= char <= "\u0aff" for char in text)
+    if language == "Punjabi":
+        return any("\u0a00" <= char <= "\u0a7f" for char in text)
+    if language == "Odia":
+        return any("\u0b00" <= char <= "\u0b7f" for char in text)
+    if language == "Urdu":
+        return any("\u0600" <= char <= "\u06ff" for char in text)
     return detect_script_language(text) == language
 
 
@@ -52,15 +63,15 @@ def _cache_key(text: str, language: str) -> str:
 
 def translate_text(text: str, language: str) -> str:
     """
-    Returns text in the requested language. If translation fails or returns
-    the source language, return a localized status instead of silently
-    displaying English as though it were translated.
+    Returns text in the requested language. Uses cached translations,
+    followed by the translation_service LLM/Deep-translator pipeline.
     """
     if not text or language == "English":
         return text
 
     cache_key = _cache_key(text, language)
 
+    # 1. Check MongoDB cache
     try:
         from app.database.mongodb import get_db
         db = get_db()
@@ -68,39 +79,48 @@ def translate_text(text: str, language: str) -> str:
         if cached and _has_target_script(cached.get("translated_text", ""), language):
             return cached["translated_text"]
     except Exception:
-        db = None  # Mongo unavailable - proceed without caching rather than failing
+        db = None
 
+    # 2. Try high-precision translation service
+    try:
+        from app.nlp.translation_service import translate_response_to_target
+        res = translate_response_to_target(text, language)
+        if res and res.strip() and _has_target_script(res, language):
+            return res.strip()
+    except Exception as e:
+        logger.warning("Translation service call failed: %s, trying direct LLM", e)
+
+    # 3. Direct LLM call fallback
     try:
         system_prompt = TRANSLATE_SYSTEM_PROMPT.format(language=language)
+        num_pred = max(settings.OLLAMA_TRANSLATE_NUM_PREDICT, min(1200, len(text) * 2))
         translated = generate_raw(
-            system_prompt, text,
-            model=settings.OLLAMA_TRANSLATE_MODEL,  # falls back to OLLAMA_MODEL if unset
-            num_predict=max(settings.OLLAMA_TRANSLATE_NUM_PREDICT, min(900, len(text))),
+            system_prompt,
+            f"Translate to {language}:\n\n{text}",
+            model=settings.OLLAMA_TRANSLATE_MODEL,
+            num_predict=num_pred,
         )
         translated = translated.strip()
-        if not translated or not _has_target_script(translated, language):
-            logger.warning("Translation returned no %s script; refusing source-language fallback.", language)
-            return _translation_unavailable(language)
-    except OllamaUnavailableError:
-        logger.warning("Translation unavailable for %s; returning localized status.", language)
-        return _translation_unavailable(language)
+        if translated and _has_target_script(translated, language):
+            if db is not None:
+                try:
+                    db.translations.update_one(
+                        {"cache_key": cache_key},
+                        {"$set": {
+                            "cache_key": cache_key,
+                            "language": language,
+                            "source_text": text,
+                            "translated_text": translated,
+                        }},
+                        upsert=True,
+                    )
+                except Exception:
+                    pass
+            return translated
+    except Exception as e:
+        logger.warning("Direct LLM translation fallback failed: %s", e)
 
-    if db is not None:
-        try:
-            db.translations.update_one(
-                {"cache_key": cache_key},
-                {"$set": {
-                    "cache_key": cache_key,
-                    "language": language,
-                    "source_text": text,
-                    "translated_text": translated,
-                }},
-                upsert=True,
-            )
-        except Exception:
-            pass  # caching is a best-effort optimization, never fail the request over it
-
-    return translated
+    return _translation_unavailable(language)
 
 
 async def stream_translate_text(text: str, language: str):
@@ -132,16 +152,14 @@ async def stream_translate_text(text: str, language: str):
         ):
             translated_parts.append(delta)
             yield delta
-    except LLMUnavailableError as e:
-        logger.warning("Streaming translation unavailable for %s: %s", language, e)
-        raise TranslationUnavailableError(str(e)) from e
+    except Exception as e:
+        logger.warning("Streaming translation error: %s, falling back to sync", e)
+        fallback = translate_text(text, language)
+        yield fallback
+        return
 
     translated = "".join(translated_parts).strip()
-    if not translated or not _has_target_script(translated, language):
-        logger.warning("Streaming translation returned no %s script.", language)
-        raise TranslationUnavailableError(f"Translation did not produce {language} text.")
-
-    if db is not None:
+    if translated and _has_target_script(translated, language) and db is not None:
         try:
             db.translations.update_one(
                 {"cache_key": cache_key},

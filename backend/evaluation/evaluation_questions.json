@@ -1,0 +1,165 @@
+[
+  {
+    "question_id": "Q001",
+    "question": "What is Article 21 of the Indian Constitution?",
+    "category": "ARTICLE_LOOKUP",
+    "expected_document": "constitution",
+    "expected_section_or_article": "21",
+    "expected_answer_contains": ["life", "personal liberty", "deprived"]
+  },
+  {
+    "question_id": "Q002",
+    "question": "What does Article 14 say about equality?",
+    "category": "ARTICLE_LOOKUP",
+    "expected_document": "constitution",
+    "expected_section_or_article": "14",
+    "expected_answer_contains": ["equality", "equal protection", "law"]
+  },
+  {
+    "question_id": "Q003",
+    "question": "Explain Article 19 in simple words.",
+    "category": "EXPLANATION_QUERY",
+    "expected_document": "constitution",
+    "expected_section_or_article": "19",
+    "expected_answer_contains": ["freedom", "speech", "expression"]
+  },
+  {
+    "question_id": "Q004",
+    "question": "What does Section 302 of BNS say?",
+    "category": "SECTION_LOOKUP",
+    "expected_document": "bns",
+    "expected_section_or_article": "302",
+    "expected_answer_contains": []
+  },
+  {
+    "question_id": "Q005",
+    "question": "What does Section 999999 say?",
+    "category": "HALLUCINATION_TEST",
+    "expected_document": null,
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["could not find", "not found", "unavailable"],
+    "notes": "Hallucination prevention test. System must NOT fabricate an answer."
+  },
+  {
+    "question_id": "Q006",
+    "question": "Which documents discuss electronic records?",
+    "category": "MULTI_DOCUMENT_QUERY",
+    "expected_document": null,
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["electronic", "record"]
+  },
+  {
+    "question_id": "Q007",
+    "question": "Compare the provisions related to bail in BNSS and CrPC.",
+    "category": "COMPARISON_QUERY",
+    "expected_document": "bnss",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["bail", "BNSS"]
+  },
+  {
+    "question_id": "Q008",
+    "question": "What is the right to education under the Constitution?",
+    "category": "ARTICLE_LOOKUP",
+    "expected_document": "constitution",
+    "expected_section_or_article": "21A",
+    "expected_answer_contains": ["education", "children"]
+  },
+  {
+    "question_id": "Q009",
+    "question": "What is Habeas Corpus?",
+    "category": "LEGAL_DEFINITION",
+    "expected_document": null,
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["habeas corpus", "body", "court"]
+  },
+  {
+    "question_id": "Q010",
+    "question": "How do I file an e-court petition online?",
+    "category": "PROCEDURE_QUERY",
+    "expected_document": "efiling-User-manual",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["file", "online", "petition"]
+  },
+  {
+    "question_id": "Q011",
+    "question": "What are the Directive Principles of State Policy?",
+    "category": "LEGAL_DEFINITION",
+    "expected_document": "constitution",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["directive", "state policy"]
+  },
+  {
+    "question_id": "Q012",
+    "question": "Was Article 21A inserted by an amendment?",
+    "category": "AMENDMENT_QUERY",
+    "expected_document": "constitution",
+    "expected_section_or_article": "21A",
+    "expected_answer_contains": ["86th amendment", "2002", "inserted"]
+  },
+  {
+    "question_id": "Q013",
+    "question": "Compare Article 14 and Article 21.",
+    "category": "COMPARISON_QUERY",
+    "expected_document": "constitution",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["Article 14", "Article 21", "equality", "liberty"]
+  },
+  {
+    "question_id": "Q014",
+    "question": "What is the main purpose of the Constitution of India?",
+    "category": "DOCUMENT_SUMMARY",
+    "expected_document": "constitution",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["justice", "liberty", "equality", "fraternity"]
+  },
+  {
+    "question_id": "Q015",
+    "question": "What does Section 12 say?",
+    "category": "AMBIGUITY_TEST",
+    "expected_document": null,
+    "expected_section_or_article": "12",
+    "expected_answer_contains": [],
+    "notes": "Ambiguity test. Section 12 appears in multiple documents. System should ask for clarification."
+  },
+  {
+    "question_id": "Q016",
+    "question": "Tell me about legal aid for prisoners.",
+    "category": "GENERAL_DOCUMENT_QUERY",
+    "expected_document": "sop on access to legal aid services to prisoners",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["legal aid", "prisoner"]
+  },
+  {
+    "question_id": "Q017",
+    "question": "What are the provisions about juvenile justice?",
+    "category": "GENERAL_DOCUMENT_QUERY",
+    "expected_document": null,
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["juvenile", "justice"]
+  },
+  {
+    "question_id": "Q018",
+    "question": "Explain Section 302 in simple words.",
+    "category": "EXPLANATION_QUERY",
+    "expected_document": null,
+    "expected_section_or_article": "302",
+    "expected_answer_contains": []
+  },
+  {
+    "question_id": "Q019",
+    "question": "What are the exceptions to fundamental rights?",
+    "category": "ARTICLE_LOOKUP",
+    "expected_document": "constitution",
+    "expected_section_or_article": null,
+    "expected_answer_contains": ["restriction", "reasonable", "Article 19"]
+  },
+  {
+    "question_id": "Q020",
+    "question": "What changed in the latest version of this document?",
+    "category": "AMENDMENT_QUERY",
+    "expected_document": null,
+    "expected_section_or_article": null,
+    "expected_answer_contains": [],
+    "notes": "Follow-up / vague query test."
+  }
+]

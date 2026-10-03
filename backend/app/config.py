@@ -61,15 +61,14 @@ class Settings:
     # Chat context control
     MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "6"))
 
-    # LLM generation speed tuning for Ollama (see app/services/llm.py)
-    # These are only relevant when Groq is NOT being used.
-    OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "200"))
-    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+    # LLM generation tuning for Ollama: Generous token limit avoids truncated/partial responses
+    OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "600"))
+    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
     OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
 
     # Translation-specific model/settings (see app/services/translator.py).
     OLLAMA_TRANSLATE_MODEL: str = os.getenv("OLLAMA_TRANSLATE_MODEL", "") or None
-    OLLAMA_TRANSLATE_NUM_PREDICT: int = int(os.getenv("OLLAMA_TRANSLATE_NUM_PREDICT", "200"))
+    OLLAMA_TRANSLATE_NUM_PREDICT: int = int(os.getenv("OLLAMA_TRANSLATE_NUM_PREDICT", "800"))
 
     # For general/hybrid questions in a non-English language:
     # True (default) = single LLM call in target language (fastest).

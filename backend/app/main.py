@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routes import chat, voice, conversations, auth, nlp, export
+from app.routes import chat, voice, conversations, auth, nlp, export, intelligence
 from app.database.mongodb import MongoConnectionError
 
 logging.basicConfig(
@@ -39,6 +39,7 @@ app.include_router(voice.router)
 app.include_router(conversations.router)
 app.include_router(nlp.router)
 app.include_router(export.router)
+app.include_router(intelligence.router)
 
 
 @app.exception_handler(MongoConnectionError)
@@ -73,6 +74,8 @@ def health():
 
     try:
         import os
+        from app.rag import chroma_store
+        checks["chromadb"] = f"ok ({chroma_store.count()} chunks)"
         checks["faiss_index"] = "ok" if os.path.exists(settings.FAISS_INDEX_PATH) else "missing - run process_documents.py"
         checks["bm25_index"] = "ok" if os.path.exists(settings.BM25_PATH) else "missing - run process_documents.py"
     except Exception as e:

@@ -30,6 +30,21 @@ function authHeaders(extra = {}) {
   return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("The server did not respond in time. Check that the backend is running, then retry.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // --- Auth ------------------------------------------------------------------
 
 export async function registerUser({ username, email, password }) {
@@ -65,13 +80,14 @@ export async function fetchCurrentUser() {
  * connection, which stops generation on the backend too instead of just
  * ignoring the result client-side.
  */
-export async function streamChatMessage({ message, conversationId, language, overrideLanguage = false, signal, onChunk, onPhase, onReplace, onDone, onError }) {
+export async function streamChatMessage({ message, conversationId, documentId = null, language, overrideLanguage = false, signal, onChunk, onPhase, onReplace, onDone, onError }) {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       message,
       conversation_id: conversationId || null,
+      document_id: documentId,
       language: language || "Auto-Detect",
       override_language: overrideLanguage,
     }),
@@ -233,6 +249,74 @@ export async function getRelatedProvisions(nodeType, identifier) {
 }
 
 export async function getHealthStatus() {
-  const res = await fetch(`${API_BASE}/api/health`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/health`);
   return handle(res);
+}
+
+// --- Intelligence & Judiciary Endpoints -------------------------------------
+
+export async function fetchDocuments() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/documents`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchDocumentDetail(docId) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/documents/${encodeURIComponent(docId)}`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function searchLegalDocuments(query, docId = null) {
+  let url = `${API_BASE}/api/search?q=${encodeURIComponent(query)}`;
+  if (docId) url += `&document_id=${encodeURIComponent(docId)}`;
+  const res = await fetchWithTimeout(url, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function compareVersions(documentId, versionA, versionB, section = null) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/compare`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      document_id: documentId,
+      version_a: versionA,
+      version_b: versionB,
+      section: section || null,
+    }),
+  });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchTimeline(docId = null) {
+  let url = `${API_BASE}/api/timeline`;
+  if (docId) url += `?document_id=${encodeURIComponent(docId)}`;
+  const res = await fetchWithTimeout(url, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchUpdates() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/updates`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchMonitoringStatus() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/monitoring/status`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function triggerMonitoringCheck() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/monitoring/check`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+  });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchFullGraph(limit = 100) {
+  const res = await fetchWithTimeout(`${API_BASE}/api/graph/full?limit=${limit}`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
+}
+
+export async function fetchSystemStats() {
+  const res = await fetchWithTimeout(`${API_BASE}/api/stats`, { headers: authHeaders() });
+  return handle(res, { authRequired: true });
 }

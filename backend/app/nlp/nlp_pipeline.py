@@ -38,8 +38,8 @@ from typing import List, Dict, Optional
 LEGAL_EXPANSIONS = {
     r"\bFIR\b": "First Information Report",
     r"\bPIL\b": "Public Interest Litigation",
-    r"\bSC\b": "Supreme Court",
-    r"\bHC\b": "High Court",
+    r"\bin\s+SC\b|\bat\s+SC\b|\bthe\s+SC\b|\bSC\b": "Supreme Court",
+    r"\bin\s+HC\b|\bat\s+HC\b|\bthe\s+HC\b|\bHC\b": "High Court",
     r"\bCJ\b": "Chief Justice",
     r"\bCJI\b": "Chief Justice of India",
     r"\bCrPC\b": "Code of Criminal Procedure",
@@ -51,14 +51,12 @@ LEGAL_EXPANSIONS = {
     r"\bNHRC\b": "National Human Rights Commission",
     r"\bSHRC\b": "State Human Rights Commission",
     r"\bST\b": "Scheduled Tribe",
-    r"\bSC\b": "Scheduled Caste",
     r"\bOBC\b": "Other Backward Class",
     r"\bEWS\b": "Economically Weaker Section",
     r"\bCAA\b": "Citizenship Amendment Act",
     r"\bRTI\b": "Right to Information",
     r"\bRTE\b": "Right to Education",
     r"\bWPS\b": "Writ of Prohibition",
-    r"\bHC\b": "Habeas Corpus",
 }
 
 INTENT_PATTERNS = {

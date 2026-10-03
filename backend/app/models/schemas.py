@@ -20,6 +20,7 @@ class SourceRef(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
+    document_id: Optional[str] = None
     language: str = "Auto-Detect"
     override_language: bool = False
     # user_id intentionally NOT accepted here - the authenticated user (see

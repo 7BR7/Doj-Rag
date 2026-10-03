@@ -39,8 +39,11 @@ CHAPTER_RE = re.compile(r"^CHAPTER\s+([IVXLCDM]+[A-Z]?)\b", re.IGNORECASE)
 # bracket, so a same-line-only, non-newline-anchored (?<!\d) guard is used
 # instead; it still blocks the "2015" case since the digit before "015" is
 # itself a digit.
-ARTICLE_ANCHOR_RE = re.compile(
-    r"(?<!\d)(?P<num>\d{1,3}[A-Z]?)\.\s+(?P<title>[A-Z][\s\S]{2,240}?)\.\s*[—\-]{1,2}\s*",
+ARTICLE_START_RE = re.compile(
+    r"(?m)^[ \t]*\[?\s*(?P<num>\d{1,3}[A-Z]?)\.\s+(?=[A-Z])"
+)
+ARTICLE_TITLE_RE = re.compile(
+    r"(?P<title>[A-Z][\s\S]{2,400}?)\.\s*[—\-]{1,2}\s*"
 )
 
 # Bare TOC-style line: "21." alone or "21. Title" with no em-dash on that line
@@ -137,12 +140,23 @@ def parse_constitution(document_id: str, document_name: str, pages: List[str],
     full_text, offsets = _page_boundaries(pages)
     part_chapter_markers = _track_part_chapter(pages, toc_pages)
 
-    anchors = list(ARTICLE_ANCHOR_RE.finditer(full_text))
+    starts = list(ARTICLE_START_RE.finditer(full_text))
+    anchors = []
+    for index, start in enumerate(starts):
+        next_start = starts[index + 1].start() if index + 1 < len(starts) else len(full_text)
+        title_match = ARTICLE_TITLE_RE.search(full_text, start.end(), next_start)
+        if title_match:
+            anchors.append({
+                "num": start.group("num"),
+                "start": start.start(),
+                "body_start": title_match.end(),
+                "title": re.sub(r"\s+", " ", title_match.group("title")).strip(),
+            })
     articles = []
     seen_numbers = {}  # article number -> index in `articles` (keep first REAL match)
 
-    for i, m in enumerate(anchors):
-        start_offset = m.start()
+    for i, anchor in enumerate(anchors):
+        start_offset = anchor["start"]
         page_num = _offset_to_page(start_offset, offsets)
 
         # Skip anchors that land on a detected TOC page - they are noise
@@ -150,11 +164,11 @@ def parse_constitution(document_id: str, document_name: str, pages: List[str],
         if (page_num - 1) in toc_pages:
             continue
 
-        num = m.group("num")
-        title = re.sub(r"\s+", " ", m.group("title")).strip()
+        num = anchor["num"]
+        title = anchor["title"]
 
-        body_start = m.end()
-        body_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(full_text)
+        body_start = anchor["body_start"]
+        body_end = anchors[i + 1]["start"] if i + 1 < len(anchors) else len(full_text)
         body = full_text[body_start:body_end].strip()
 
         # Guard: a genuine article should have a reasonably substantial body.

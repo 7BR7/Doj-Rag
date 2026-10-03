@@ -18,7 +18,21 @@ function formatDate(iso, language) {
   }
 }
 
-export default function Sidebar({ conversations, onDelete, onNewConversation, collapsed, onToggleCollapse }) {
+// Navigation items for the intelligence features panel
+const NAV_ITEMS = [
+  { icon: "🏠", label: "Dashboard", key: "dashboard" },
+  { icon: "🔍", label: "Search", key: "search" },
+  { icon: "📚", label: "Documents", key: "documents" },
+  { icon: "⚖️", label: "Compare", key: "compare" },
+  { icon: "⏳", label: "Timeline", key: "timeline" },
+  { icon: "🔔", label: "Updates", key: "updates" },
+  { icon: "🕸️", label: "Knowledge Graph", key: "graph" },
+];
+
+export default function Sidebar({
+  conversations, onDelete, onNewConversation, collapsed, onToggleCollapse,
+  onOpenPanel  // callback: (key) => void
+}) {
   const navigate = useNavigate();
   const { conversationId: activeId } = useParams();
   const { user, logout } = useAuth();
@@ -35,6 +49,7 @@ export default function Sidebar({ conversations, onDelete, onNewConversation, co
         collapsed ? "w-14" : "w-72"
       }`}
     >
+      {/* Logo & Collapse Toggle */}
       <div className="flex items-center justify-between px-4 py-5 border-b border-maroon-700">
         {!collapsed && (
           <div className="flex items-center gap-2.5">
@@ -58,6 +73,7 @@ export default function Sidebar({ conversations, onDelete, onNewConversation, co
         </button>
       </div>
 
+      {/* New Conversation */}
       <div className="px-3 pt-4">
         <button
           onClick={onNewConversation}
@@ -68,6 +84,47 @@ export default function Sidebar({ conversations, onDelete, onNewConversation, co
         </button>
       </div>
 
+      {/* Intelligence Navigation */}
+      {!collapsed && (
+        <div className="px-3 pt-3 pb-1 border-b border-maroon-700">
+          <p className="text-[10px] uppercase tracking-widest text-maroon-400 mb-2 px-1">
+            Intelligence Features
+          </p>
+          <div className="grid grid-cols-4 gap-1">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.key}
+                onClick={() => onOpenPanel?.(item.key)}
+                title={item.label}
+                className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-maroon-700 transition-colors group"
+              >
+                <span className="text-base">{item.icon}</span>
+                <span className="text-[9px] text-maroon-300 group-hover:text-gold-300 leading-tight">
+                  {item.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Collapsed Intelligence Icons */}
+      {collapsed && (
+        <div className="px-1 pt-3 pb-1 border-b border-maroon-700 flex flex-col items-center gap-1">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => onOpenPanel?.(item.key)}
+              title={item.label}
+              className="p-1.5 text-base rounded hover:bg-maroon-700 transition-colors"
+            >
+              {item.icon}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Conversation History */}
       <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-1">
         {conversations.length === 0 && !collapsed && (
           <p className="text-maroon-200/70 text-xs px-2 py-4">
@@ -109,6 +166,7 @@ export default function Sidebar({ conversations, onDelete, onNewConversation, co
         ))}
       </nav>
 
+      {/* Footer */}
       {!collapsed && (
         <div className="px-4 py-3 border-t border-maroon-700 space-y-2">
           <div className="flex items-center justify-between">

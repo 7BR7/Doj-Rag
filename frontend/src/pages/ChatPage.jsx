@@ -4,6 +4,13 @@ import Sidebar from "../components/Sidebar.jsx";
 import ChatWindow from "../components/ChatWindow.jsx";
 import InputBar from "../components/InputBar.jsx";
 import LanguageSelector from "../components/LanguageSelector.jsx";
+import SearchModal from "../components/SearchModal.jsx";
+import CompareModal from "../components/CompareModal.jsx";
+import UpdatesModal from "../components/UpdatesModal.jsx";
+import TimelineModal from "../components/TimelineModal.jsx";
+import DocumentsModal from "../components/DocumentsModal.jsx";
+import GraphModal from "../components/GraphModal.jsx";
+import DashboardModal from "../components/DashboardModal.jsx";
 import { useI18n } from "../i18n.jsx";
 import { useTextToSpeech, useVoiceRecorder } from "../hooks/useSpeech.js";
 import {
@@ -36,6 +43,9 @@ export default function ChatPage() {
   const [errorBanner, setErrorBanner] = useState(null);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editingText, setEditingText] = useState(null);
+
+  // Intelligence panel modals
+  const [openPanel, setOpenPanel] = useState(null); // "dashboard"|"search"|"documents"|"compare"|"timeline"|"updates"|"graph"
 
   const { speak, stop, speakingId, unavailableNotice } = useTextToSpeech();
   const { isRecording, start: startRecording, stop: stopRecording } = useVoiceRecorder();
@@ -130,7 +140,7 @@ export default function ChatPage() {
     }
   };
 
-  const handleSend = async (text) => {
+  const handleSend = async (text, documentId = null) => {
     if (sendInFlightRef.current) return;
     sendInFlightRef.current = true;
     setErrorBanner(null);
@@ -182,6 +192,7 @@ export default function ChatPage() {
       await streamChatMessage({
         message: text,
         conversationId: effectiveConversationId,
+        documentId,
         language,
         overrideLanguage: isManualOverride,
         signal: controller.signal,
@@ -203,6 +214,8 @@ export default function ChatPage() {
             language: event.language,
             intent: event.intent || null,
             relatedProvisions: event.related_provisions || [],
+            whyThisAnswer: event.why_this_answer || null,
+            citationVerification: event.citation_verification || null,
             latencyMs,
             streaming: false,
             translating: false,
@@ -302,6 +315,7 @@ export default function ChatPage() {
         onNewConversation={handleNewConversation}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+        onOpenPanel={(key) => setOpenPanel(key)}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -394,6 +408,47 @@ export default function ChatPage() {
           />
         </div>
       </main>
+
+      {/* Intelligence Modals */}
+      <DashboardModal
+        isOpen={openPanel === "dashboard"}
+        onClose={() => setOpenPanel(null)}
+      />
+      <SearchModal
+        isOpen={openPanel === "search"}
+        onClose={() => setOpenPanel(null)}
+        onSelectResult={(r) => {
+          const q = r.section
+            ? `What does Section ${r.section} of ${r.document_name} say?`
+            : r.article
+            ? `What does Article ${r.article} say?`
+            : r.snippet;
+          handleSend(q);
+        }}
+      />
+      <DocumentsModal
+        isOpen={openPanel === "documents"}
+        onClose={() => setOpenPanel(null)}
+        onAskAboutDoc={(doc) => {
+          handleSend(`Summarize the document: ${doc.document_name}`, doc.document_id);
+        }}
+      />
+      <CompareModal
+        isOpen={openPanel === "compare"}
+        onClose={() => setOpenPanel(null)}
+      />
+      <TimelineModal
+        isOpen={openPanel === "timeline"}
+        onClose={() => setOpenPanel(null)}
+      />
+      <UpdatesModal
+        isOpen={openPanel === "updates"}
+        onClose={() => setOpenPanel(null)}
+      />
+      <GraphModal
+        isOpen={openPanel === "graph"}
+        onClose={() => setOpenPanel(null)}
+      />
     </div>
   );
 }
