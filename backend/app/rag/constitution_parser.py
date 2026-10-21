@@ -40,10 +40,10 @@ CHAPTER_RE = re.compile(r"^CHAPTER\s+([IVXLCDM]+[A-Z]?)\b", re.IGNORECASE)
 # instead; it still blocks the "2015" case since the digit before "015" is
 # itself a digit.
 ARTICLE_START_RE = re.compile(
-    r"(?m)^[ \t]*\[?\s*(?P<num>\d{1,3}[A-Z]?)\.\s+(?=[A-Z])"
+    r"(?m)^[ \t]*(?:\d{1,2}\[|\[)?\s*(?P<num>\d{1,3}[A-Z]?)\.\s+(?=[A-Za-z])"
 )
 ARTICLE_TITLE_RE = re.compile(
-    r"(?P<title>[A-Z][\s\S]{2,400}?)\.\s*[—\-]{1,2}\s*"
+    r"(?P<title>[A-Za-z][\s\S]{2,400}?)\.\s*[—\-–�]{1,2}\s*"
 )
 
 # Bare TOC-style line: "21." alone or "21. Title" with no em-dash on that line

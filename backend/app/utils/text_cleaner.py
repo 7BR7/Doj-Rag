@@ -6,6 +6,7 @@ pages of Indian legal PDFs (Constitution, Bare Acts, Rules), WITHOUT touching
 valid legal text. This runs before structure detection/chunking.
 """
 import re
+import unicodedata
 from collections import Counter
 from typing import List, Dict
 
@@ -60,11 +61,24 @@ def is_page_number_line(line: str) -> bool:
     return bool(PAGE_NUM_ONLY_RE.match(line) or ROMAN_NUM_ONLY_RE.match(line))
 
 
+def normalize_indic_unicode(text: str) -> str:
+    """
+    Normalizes Indic script text using Unicode NFC format while strictly
+    preserving zero-width joiners (ZWJ \u200D and ZWNJ \u200C) essential
+    for conjuncts in Devanagari, Malayalam, Bengali, Tamil, Kannada, and Telugu.
+    """
+    if not text:
+        return ""
+    # NFC preserves character equivalence without stripping Indic viramas
+    return unicodedata.normalize("NFC", text)
+
+
 def clean_page_text(text: str, boilerplate_lines: set) -> str:
     """
     Remove boilerplate/page-number lines from one page of text.
     Preserves all remaining content (including numbered legal clauses).
     """
+    text = normalize_indic_unicode(text)
     cleaned_lines = []
     prev_blank = False
     for raw_line in text.split("\n"):

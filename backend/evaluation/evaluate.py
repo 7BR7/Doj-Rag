@@ -118,14 +118,19 @@ async def run_evaluation(auth_token: str):
             print(f"  {badge} kw={kw_score:.2f} | halluc={'OK' if halluc_pass else 'FAIL'} | {latency:.1f}s | intent={result['intent']}")
             print(f"  Answer: {answer_text[:120]}...")
 
-    # Summary
+    # Summary and Percentiles
     passed = sum(1 for r in results if r.get("status") == "PASS")
     errored = sum(1 for r in results if r.get("status") == "ERROR")
     avg_kw = total_keyword_score / max(evaluated, 1)
     halluc_rate = total_hallucination_pass / max(sum(1 for q in questions if q["category"] == "HALLUCINATION_TEST"), 1)
 
+    latencies = sorted([r["latency_s"] for r in results if "latency_s" in r])
+    p50_latency = latencies[len(latencies) // 2] if latencies else 0.0
+    p95_index = int(len(latencies) * 0.95)
+    p95_latency = latencies[min(p95_index, len(latencies) - 1)] if latencies else 0.0
+
     print("\n" + "=" * 60)
-    print("EVALUATION SUMMARY")
+    print("EVALUATION BENCHMARK SUMMARY")
     print(f"  Total questions : {len(questions)}")
     print(f"  Evaluated       : {evaluated}")
     print(f"  Passed          : {passed}")
@@ -133,6 +138,8 @@ async def run_evaluation(auth_token: str):
     print(f"  Errors          : {errored}")
     print(f"  Avg keyword score: {avg_kw:.3f}")
     print(f"  Hallucination prevention: {halluc_rate:.1%}")
+    print(f"  Latency P50     : {p50_latency:.2f}s")
+    print(f"  Latency P95     : {p95_latency:.2f}s")
     print("=" * 60)
 
     # Save results
@@ -147,6 +154,8 @@ async def run_evaluation(auth_token: str):
                 "errored": errored,
                 "avg_keyword_score": round(avg_kw, 4),
                 "hallucination_prevention_rate": round(halluc_rate, 4),
+                "p50_latency_s": p50_latency,
+                "p95_latency_s": p95_latency,
             },
             "results": results,
         }, f, indent=2, ensure_ascii=False)

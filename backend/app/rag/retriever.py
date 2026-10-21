@@ -258,12 +258,12 @@ def retrieve(message: str) -> Dict:
     except Exception as e:
         logger.debug("NLP decomposition skipped: %s", e)
 
-    exact_result = retrieve_exact_or_suggest(clean_message)
-    if exact_result.get("mode") not in ("exact", "suggested"):
-        # Also try the raw user message in case exact regex matched native script directly
-        alt_exact = retrieve_exact_or_suggest(message)
-        if alt_exact.get("mode") in ("exact", "suggested"):
-            exact_result = alt_exact
+    # Check native query first for exact match (e.g. native Article 21A/21এ shouldn't be overridden by imperfect translation)
+    raw_exact = retrieve_exact_or_suggest(message)
+    if raw_exact.get("mode") in ("exact", "suggested"):
+        exact_result = raw_exact
+    else:
+        exact_result = retrieve_exact_or_suggest(clean_message)
 
     if exact_result["mode"] in ("exact", "suggested"):
         chunks = exact_result["chunks"]
@@ -306,6 +306,35 @@ def retrieve(message: str) -> Dict:
             "intent": exact_result["intent"],
             "chunks": [],
         }
+
+    # Check for high-level legal concept -> direct relevant constitutional articles lookup
+    try:
+        from app.rag.concept_retriever import extract_concept_from_query, get_articles_for_concept
+        concept = extract_concept_from_query(message) or extract_concept_from_query(clean_message)
+        if concept:
+            article_nums = get_articles_for_concept(concept)
+            if article_nums:
+                logger.info("Concept '%s' matched -> fetching articles: %s", concept, article_nums)
+                concept_chunks = _multi_article_retrieve(article_nums, "article")
+                if concept_chunks:
+                    # Provide enough context for the LLM to cover broad categories
+                    top_k = min(len(concept_chunks), max(settings.TOP_K_FINAL, 8))
+                    seen_cids = set()
+                    deduped = []
+                    for c in concept_chunks:
+                        cid = c.get("chunk_id", "")
+                        if cid not in seen_cids:
+                            seen_cids.add(cid)
+                            deduped.append(c)
+                    return {
+                        "mode": "concept",
+                        "chunks": deduped[:top_k],
+                        "intent": {"query_type": "general", "number": None,
+                                   "document_hint": "constitution", "act_name": None},
+                        "concept": concept,
+                    }
+    except Exception as e:
+        logger.debug("Concept retrieval skipped: %s", e)
 
     # General question -> hybrid retrieval using harmonized search terms
     chunks = hybrid_retrieve(clean_message)

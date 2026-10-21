@@ -26,6 +26,33 @@ async def chat(req: ChatRequest, request: Request, current_user: dict = Depends(
     if not req.message or not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
+    # Rate limiting (per authenticated user)
+    from app.security import check_rate_limit, check_prompt_injection
+    client_id = current_user.get("user_id") or request.client.host
+    if not check_rate_limit(client_id, max_requests=40, window_seconds=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please wait a moment before sending more queries."
+        )
+
+    # Prompt injection and jailbreak screening
+    is_suspicious, reason = check_prompt_injection(req.message)
+    if is_suspicious:
+        logger.warning("Query rejected by security filter: %s", reason)
+        async def rejection_stream():
+            yield json.dumps({
+                "type": "chunk",
+                "text": "Your query contains instructions that cannot be processed under judiciary legal security guidelines. Please phrase your request as a legal inquiry."
+            }, ensure_ascii=False) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "conversation_id": req.conversation_id or "security_blocked",
+                "language": req.language or "English",
+                "sources": [],
+                "why_this_answer": "Query blocked by prompt safety policy."
+            }, ensure_ascii=False) + "\n"
+        return StreamingResponse(rejection_stream(), media_type="application/x-ndjson")
+
     async def event_stream():
         try:
             async for event in stream_chat_message(

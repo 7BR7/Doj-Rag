@@ -120,7 +120,7 @@ def translate_query_to_english(query: str, detected_language: str) -> str:
     except Exception as e:
         logger.warning("LLM query translation failed: %s", e)
 
-    # Strategy 2: Google Translator fallback
+    # Strategy 2: Google Translator fallback with SSL verification handling
     try:
         import urllib3
         urllib3.disable_warnings()
@@ -133,7 +133,14 @@ def translate_query_to_english(query: str, detected_language: str) -> str:
             target="en"
         )
         gt.session = session
-        res = gt.translate(query)
+        # Temporarily adapt requests.get within session to ensure verify=False is respected
+        orig_get = requests.get
+        try:
+            requests.get = lambda url, **kwargs: orig_get(url, verify=False, timeout=10, **kwargs)
+            res = gt.translate(query)
+        finally:
+            requests.get = orig_get
+
         if res and res.strip():
             _save_cached_translation(query, detected_language, "English", res.strip())
             return res.strip()
@@ -178,7 +185,7 @@ def translate_response_to_target(text: str, target_language: str) -> str:
     except Exception as e:
         logger.warning("LLM response translation failed (%s): %s", target_language, e)
 
-    # Strategy 2: Google Translator fallback
+    # Strategy 2: Google Translator fallback with SSL verification handling
     try:
         import urllib3
         urllib3.disable_warnings()
@@ -191,7 +198,13 @@ def translate_response_to_target(text: str, target_language: str) -> str:
             target=LANG_CODE_MAP.get(target_language, "hi")
         )
         gt.session = session
-        res = gt.translate(text)
+        orig_get = requests.get
+        try:
+            requests.get = lambda url, **kwargs: orig_get(url, verify=False, timeout=10, **kwargs)
+            res = gt.translate(text)
+        finally:
+            requests.get = orig_get
+
         if res and res.strip():
             _save_cached_translation(text, "English", target_language, res.strip())
             return res.strip()

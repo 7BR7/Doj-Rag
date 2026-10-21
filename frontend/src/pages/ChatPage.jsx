@@ -48,7 +48,7 @@ export default function ChatPage() {
   const [openPanel, setOpenPanel] = useState(null); // "dashboard"|"search"|"documents"|"compare"|"timeline"|"updates"|"graph"
 
   const { speak, stop, speakingId, unavailableNotice } = useTextToSpeech();
-  const { isRecording, start: startRecording, stop: stopRecording } = useVoiceRecorder();
+  const { isRecording, start: startRecording, stop: stopRecording, error: micError } = useVoiceRecorder();
 
   // Tracks the in-flight /api/chat request so it can be cancelled - either
   // by an explicit "Stop" click, or automatically when the user chooses to
@@ -274,12 +274,14 @@ export default function ChatPage() {
     if (recorded.transcriptText && recorded.transcriptText.trim()) {
       return recorded.transcriptText.trim();
     }
-    // Fallback: send recorded audio to optimized Faster-Whisper backend
+    // Fallback: send recorded audio to optimized Faster-Whisper backend.
+    // Only send if there's actual audio data (blob must be > a few bytes).
+    if (!recorded.size || recorded.size < 100) return null;
     try {
       const res = await transcribeAudio(recorded, language);
-      return res.text;
+      return res.text || null;
     } catch (e) {
-      setErrorBanner(t("errorTranscribe"));
+      setErrorBanner(e.message || t("errorTranscribe"));
       return null;
     }
   };
@@ -405,6 +407,7 @@ export default function ChatPage() {
             editingText={editingText}
             onCancelEdit={handleCancelEdit}
             onStop={cancelInFlightRequest}
+            micError={micError}
           />
         </div>
       </main>

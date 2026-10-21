@@ -34,6 +34,7 @@ from app.services.translator import (
     TranslationUnavailableError,
 )
 from app.utils.legal_query_parser import is_legal_query
+from app.rag.query_router import classify_query, QUERY_TYPE_GENERAL, QUERY_TYPE_LEGAL, QUERY_TYPE_PDF_SPECIFIC, QUERY_TYPE_HYBRID
 
 logger = logging.getLogger("doj_rag.chat_service")
 
@@ -271,7 +272,14 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
         yield _done_event(conversation_id, language, sources=sources)
         return
 
-    if not is_legal_query(message):
+    # --- Intelligent Query Classification & Routing ----------------------
+    classification = classify_query(message, document_id=document_id)
+    route = classification["route"]
+    logger.info("Intelligent Query Route: %s (confidence: %.2f, reason: %s)",
+                route, classification.get("confidence", 0.0), classification.get("reason", ""))
+
+    # If general non-legal query, stream directly without forcing PDF retrieval
+    if route == QUERY_TYPE_GENERAL:
         parts = []
         try:
             async for delta in llm.stream_general_answer(message, language, history):
@@ -408,14 +416,20 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
                 if language != "English":
                     answer = translate_text(answer, language)
                 yield {"type": "replace", "text": answer}
-            elif language != "English":
-                from app.services.translator import _has_target_script
-                if not _has_target_script(answer, language):
-                    logger.info("Exact-mode answer lacked %s script; translating...", language)
+            else:
+                from app.rag.response_validator import validate_response, clean_repetitions_and_normalize
+                answer = clean_repetitions_and_normalize(answer)
+                v_res = validate_response(answer, language, chunks)
+                if not v_res["is_valid"]:
+                    logger.info("Exact answer quality issue (%s). Repairing or fallback translating...", v_res["reason"])
                     yield {"type": "phase", "phase": "translating"}
-                    translated = translate_text(answer, language)
-                    if translated and _has_target_script(translated, language):
-                        answer = translated
+                    if language != "English":
+                        translated = translate_text(source_answer, language)
+                        if translated and len(translated) > 20:
+                            answer = translated
+                            yield {"type": "replace", "text": answer}
+                    else:
+                        answer = source_answer
                         yield {"type": "replace", "text": answer}
         except (llm.OllamaUnavailableError, llm.LLMUnavailableError):
             logger.warning("Concise legal answer generation unavailable; returning the provision text.")
@@ -435,15 +449,29 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             yield {"type": "replace", "text": answer}
         _save_message(conversation_id, "bot", answer, language, sources)
             
-        # Verify citations and explainability
+        # Verify citations and legal fact-checking
         citation_info = {}
         why_answer = ""
         try:
             from app.rag.citation_verifier import verify_answer_citations
+            from app.rag.fact_checker import fact_check_legal_claims
+            
+            # Run deterministic legal fact-checking
+            fact_check = fact_check_legal_claims(answer, chunks)
+            if not fact_check["is_factually_accurate"] and fact_check["corrections"]:
+                logger.warning("Factual correction triggered: %s", fact_check["factual_errors"])
+                answer = fact_check["corrected_text"]
+                yield {"type": "replace", "text": answer}
+
             citation_info = verify_answer_citations(answer, chunks)
+            citation_info["fact_check"] = {
+                "is_factually_accurate": fact_check["is_factually_accurate"],
+                "factual_errors": fact_check["factual_errors"],
+                "verified_articles": fact_check["verified_articles"]
+            }
             why_answer = citation_info.get("why_this_answer", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Fact-check/citation verification pass skipped: %s", e)
 
         yield _done_event(
             conversation_id,
@@ -471,24 +499,38 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     # direct non-English generation is noticeably weaker - kept as an
     # opt-in fallback via .env, not the default, since speed is the
     # priority here.
+    # Determine prompt type according to intelligent query classification
+    prompt_type = "base"
+    if route == QUERY_TYPE_PDF_SPECIFIC:
+        prompt_type = "document"
+    elif route == QUERY_TYPE_HYBRID:
+        prompt_type = "hybrid"
+
     if settings.HYBRID_SINGLE_PASS:
         parts = []
         try:
-            async for delta in llm.stream_answer(message, chunks, language, history):
+            async for delta in llm.stream_answer(message, chunks, language, history, prompt_type=prompt_type):
                 parts.append(delta)
                 yield {"type": "chunk", "text": delta}
             answer = "".join(parts).strip()
-            # If the user requested a non-English language but the model returned English/untranslated text,
-            # translate it cleanly to guarantee a 100% complete response in that language
-            if language != "English" and answer:
+            from app.rag.response_validator import validate_response, clean_repetitions_and_normalize
+            answer = clean_repetitions_and_normalize(answer)
+            
+            # Run quality validation
+            v_res = validate_response(answer, language, chunks)
+            if not v_res["is_valid"]:
+                logger.info("Single-pass output failed validation (%s). Triggering fallback translation...", v_res["reason"])
+                yield {"type": "phase", "phase": "translating"}
+                # Generate clean English grounding draft if needed, then translate
+                english_draft = answer
                 from app.services.translator import _has_target_script
-                if not _has_target_script(answer, language):
-                    logger.info("Single-pass output for %s lacked target script; translating answer...", language)
-                    yield {"type": "phase", "phase": "translating"}
-                    translated_answer = translate_text(answer, language)
-                    if translated_answer and _has_target_script(translated_answer, language):
-                        answer = translated_answer
-                        yield {"type": "replace", "text": answer}
+                if (_has_target_script(answer, language) and v_res["code"] == "EXCESSIVE_REPETITION") or v_res["code"] == "ABRUPT_TRUNCATION":
+                    # Re-summarize chunks directly
+                    english_draft = " ".join(c.get("text", "") for c in chunks[:2]) if chunks else ""
+                translated_answer = translate_text(english_draft, language)
+                if translated_answer and len(translated_answer) > 20:
+                    answer = clean_repetitions_and_normalize(translated_answer)
+                    yield {"type": "replace", "text": answer}
         except (llm.OllamaUnavailableError, llm.LLMUnavailableError) as e:
             logger.error(str(e))
             top = chunks[0]
@@ -499,15 +541,29 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
             answer = translate_text(answer, language)
             yield {"type": "replace", "text": answer}
 
-        # Verify citations and explainability
+        # Verify citations and legal fact-checking
         citation_info = {}
         why_answer = ""
         try:
             from app.rag.citation_verifier import verify_answer_citations
+            from app.rag.fact_checker import fact_check_legal_claims
+            
+            # Run deterministic legal fact-checking
+            fact_check = fact_check_legal_claims(answer, chunks)
+            if not fact_check["is_factually_accurate"] and fact_check["corrections"]:
+                logger.warning("Factual correction triggered: %s", fact_check["factual_errors"])
+                answer = fact_check["corrected_text"]
+                yield {"type": "replace", "text": answer}
+
             citation_info = verify_answer_citations(answer, chunks)
+            citation_info["fact_check"] = {
+                "is_factually_accurate": fact_check["is_factually_accurate"],
+                "factual_errors": fact_check["factual_errors"],
+                "verified_articles": fact_check["verified_articles"]
+            }
             why_answer = citation_info.get("why_this_answer", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Fact-check/citation verification pass skipped: %s", e)
 
         _save_message(conversation_id, "bot", answer, language, sources)
         yield _done_event(
@@ -524,7 +580,7 @@ async def stream_chat_message(message: str, conversation_id: Optional[str], lang
     # --- Two-pass fallback path ---------------------------------------------
     english_parts = []
     try:
-        async for delta in llm.stream_answer(message, chunks, "English", history):
+        async for delta in llm.stream_answer(message, chunks, "English", history, prompt_type=prompt_type):
             english_parts.append(delta)
             yield {"type": "chunk", "text": delta}
         answer_en = "".join(english_parts).strip()

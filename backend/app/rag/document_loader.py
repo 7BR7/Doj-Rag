@@ -65,11 +65,17 @@ def detect_toc_pages(pages: List[str]) -> set:
         lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
         if not lines:
             continue
-        numbered = [ln for ln in lines if re.match(r"^\d{1,4}[A-Z]?\.$", ln) or
-                    re.match(r"^\d{1,4}[A-Z]?\.\s+\S", ln)]
-        has_em_dash_body = any("—" in ln and len(ln) > 60 for ln in lines)
+        first_few = "\n".join(lines[:10]).upper()
+        # Explicit TOC header detection
+        if any(h in first_few for h in ["CONTENTS", "TABLE OF CONTENTS", "INDEX OF ARTICLES", "ARRANGEMENT OF CLAUSES", "ARRANGEMENT OF SECTIONS"]):
+            if "ARTICLES" in first_few or "PREAMBLE" in first_few or idx < 35:
+                toc_pages.add(idx)
+                continue
+        # Numbered-item heuristic for table of contents
+        numbered = [ln for ln in lines if re.match(r"^\[?\s*\d{1,4}[A-Z]?\.", ln)]
         ratio = len(numbered) / max(len(lines), 1)
-        if ratio > 0.5 and not has_em_dash_body:
+        has_legal_prose = any(len(ln) > 60 and ("shall" in ln or "means" in ln or "provided" in ln.lower()) for ln in lines)
+        if (ratio > 0.4 and not has_legal_prose) or (ratio > 0.25 and not has_legal_prose and idx < 35):
             toc_pages.add(idx)
     return toc_pages
 

@@ -10,13 +10,41 @@ import re
 import unicodedata
 from typing import Optional, Dict
 
+INDIC_LETTER_SUFFIX_MAP = {
+    # Bengali: এ -> A, বি -> B
+    "\u098f": "A",
+    # Hindi/Devanagari: ए/क -> A
+    "\u090f": "A",
+    "\u0915": "A",
+    # Tamil: ஏ -> A
+    "\u0b8f": "A",
+    # Telugu: ఎ/ఏ -> A
+    "\u0c0e": "A",
+    "\u0c0f": "A",
+    # Kannada: ಎ/ಏ -> A
+    "\u0c8e": "A",
+    "\u0c8f": "A",
+    # Malayalam: എ/ഏ -> A
+    "\u0d0e": "A",
+    "\u0d0f": "A",
+    # Gujarati: એ -> A
+    "\u0a8f": "A",
+    # Odia: ଏ -> A
+    "\u0b0f": "A",
+    # Punjabi: ਏ -> A
+    "\u0a0f": "A",
+}
+
+
 def normalize_indic_digits(text: str) -> str:
-    """Converts any Unicode decimal digits (e.g. Devanagari २१, Telugu ౨౧, etc.)
-    into standard ASCII 0-9 digits."""
+    """Converts any Unicode decimal digits (e.g. Devanagari २१, Telugu ౨౧, Bengali ২১, etc.)
+    into standard ASCII 0-9 digits and maps Indic sub-clause suffix letters to ASCII (e.g. ২১এ -> 21A)."""
     res = []
     for ch in text:
         if unicodedata.category(ch) == "Nd":
             res.append(str(unicodedata.digit(ch)))
+        elif ch in INDIC_LETTER_SUFFIX_MAP:
+            res.append(INDIC_LETTER_SUFFIX_MAP[ch])
         else:
             res.append(ch)
     return "".join(res)
@@ -25,7 +53,7 @@ def normalize_indic_digits(text: str) -> str:
 # English: article, art
 # Telugu: ఆర్టికల్, ఆర్టికల్స్, అధికరణ, అధికరణం, నిబంధన
 # Hindi/Marathi: अनुच्छेद, धारा, कलम (in constitution context)
-# Tamil: சரத்து, உறுப்பு
+# Tamil: சரத்து, உறுப்பு, கட்டுரை
 # Kannada: ವಿಧಿ, ಪರಿಚ್ಛೇದ
 # Malayalam: അനുച്ഛേദം
 # Bengali: অনুচ্ছেদ
@@ -37,7 +65,7 @@ ARTICLE_KW = (
     r"(?:article|art\.?|"
     r"ఆర్టికల్|ఆర్టికల్స్|అధికరణం|అధికరణ|నిబంధన|విధి|"
     r"अनुच्छेद|"
-    r"சரத்து|உறுப்பு|சட்டம்|"
+    r"சரத்து|உறுப்பு|கட்டுரை|சட்டம்|"
     r"ವಿಧಿ|ಆರ್ಟಿಕಲ್|ಪರಿಚ್ಛೇದ|ಅನುಚ್ಛೇದ|"
     r"അനുച്ഛേദം|"
     r"অনুচ্ছেদ|"
@@ -109,20 +137,20 @@ CONSTITUTION_HINT_RE = re.compile(
 )
 
 LEGAL_TOPIC_RE = re.compile(
-    r"\b(?:law|legal|constitution|article|section|rule|act|court|judge|lawyer|attorney|"
+    r"\b(?:law|legal|constitution|article|articles|section|sections|rule|rules|act|acts|court|judge|lawyer|attorney|"
     r"rights?|fundamental|writ|petition|appeal|police|fir|crime|criminal|civil|sue|lawsuit|"
     r"arrest|bail|offence|offense|prosecution|tenant|landlord|divorce|custody|inheritance|"
     r"property dispute|contract|consumer complaint|employment dispute|judgment|judgement|"
-    r"supreme court|high court|parliament|precedent)\b|"
-    r"कानून|कानूनी|संविधान|अधिकार|अदालत|न्यायालय|पुलिस|मुकदमा|वकील|जमानत|शिकायत|"
-    r"చట్టం|రాజ్యాంగం|హక్కులు|కోర్టు|పోలీసు|న్యాయవాది|వివాదం|"
-    r"சட்டம்|அரசியலமைப்பு|உரிமை|பிரிவ(?:ு|ை|ின்)|நீதிமன்றம்|காவல்துறை|வழக்கறிஞர்|"
-    r"ಕಾನೂನು|ಸಂವಿಧಾನ|ಹಕ್ಕು|ನ್ಯಾಯಾಲಯ|ಪೊಲೀಸ್|ವಕೀಲ|"
-    r"നിയമം|ഭരണഘടന|അവകാശം|കോടതി|പോലീസ്|അഭിഭാഷകൻ|"
-    r"আইন|সংবিধান|অধিকার|আদালত|পুলিশ|আইনজীবী|"
-    r"કાયદો|બંધારણ|અધિકાર|અદાલત|પોલીસ|વકીલ|"
-    r"ਕਾਨੂੰਨ|ਸੰਵਿਧਾਨ|ਅਧਿਕਾਰ|ਅਦਾਲਤ|ਪੁਲਿਸ|ਵਕੀਲ|"
-    r"قانون|آئین|حقوق|عدالت|پولیس|وکیل",
+    r"supreme court|high court|parliament|precedent|environment|forests?|trees?|wildlife)\b|"
+    r"कानून|कानूनी|संविधान|अधिकार|अनुच्छेद|धारा|अदालत|न्यायालय|पुलिस|मुकदमा|वकील|जमानत|शिकायत|पर्यावरण|वन|वृक्ष|"
+    r"చట్టం|రాజ్యాంగం|హక్కులు|ఆర్టికల్|కోర్టు|పోలీసు|న్యాయవాది|వివాదం|పర్యావరణం|అటవీ|"
+    r"சட்டம்|அரசியலமைப்பு|உரிமை|சரத்து|பிரிவ(?:ு|ை|ின்)|நீதிமன்றம்|காவல்துறை|வழக்கறிஞர்|சுற்றுச்சூழல்|காடுகள்|"
+    r"ಕಾನೂನು|ಸಂವಿಧಾನ|ಹಕ್ಕು|ವಿಧಿ|ನ್ಯಾಯಾಲಯ|ಪೊಲೀಸ್|ವಕೀಲ|ಪರಿಸರ|ಅರಣ್ಯ|"
+    r"നിയമം|ഭരണഘടന|അവകാശം|അനുച്ഛേദം|കോടതി|പോലീസ്|അഭിഭാഷകൻ|പരിസ്ഥിതി|വനം|"
+    r"আইন|সংবিধান|অধিকার|অনুচ্ছেদ|আদালত|পুলিশ|আইনজীবী|পরিবেশ|বন|"
+    r"કાયદો|બંધારણ|અધિકાર|અનુચ્છેદ|અદાલત|પોલીસ|વકીલ|પર્યાવરણ|જંગલ|"
+    r"ਕਾਨੂੰਨ|ਸੰਵਿਧਾਨ|ਅਧਿਕਾਰ|ਅਨੁਛੇਦ|ਅਦਾਲਤ|ਪੁਲਿਸ|ਵਕੀਲ|ਵਾਤਾਵਰਣ|ਜੰਗਲ|"
+    r"قانون|آئین|حقوق|آرٹیکل|دفعہ|عدالت|پولیس|وکیل",
     re.IGNORECASE | re.UNICODE,
 )
 

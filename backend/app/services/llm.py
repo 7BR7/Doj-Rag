@@ -23,7 +23,7 @@ import requests
 from app.config import settings
 from app.prompts.system_prompt import (
     BASE_SYSTEM_PROMPT, GENERAL_SYSTEM_PROMPT, CLARIFICATION_PROMPT,
-    NOT_FOUND_PROMPT, NO_CONTEXT_PROMPT
+    NOT_FOUND_PROMPT, NO_CONTEXT_PROMPT, DOCUMENT_SYSTEM_PROMPT, HYBRID_SYSTEM_PROMPT
 )
 
 logger = logging.getLogger("doj_rag.llm")
@@ -156,56 +156,81 @@ def _call_groq_sync(system_prompt: str, user_message: str, history: List[Dict] =
 
 async def stream_ollama_chat(system_prompt: str, user_message: str, history: List[Dict] = None,
                               model: str = None, num_predict: int = None,
-                              language: str = "English") -> AsyncGenerator[str, None]:
+                              language: str = "English", max_continuations: int = 2) -> AsyncGenerator[str, None]:
     """
     Async-streams the answer as it's generated, yielding text deltas.
-    Raises OllamaUnavailableError (before yielding anything) if Ollama can't
-    be reached or the model isn't available.
+    Detects premature termination (done_reason == 'length') and continues
+    the generation seamlessly so the answer is never truncated mid-sentence.
     """
-    messages = _build_messages(system_prompt, user_message, history, language=language)
     use_model = model or settings.OLLAMA_MODEL
-    payload = {
-        "model": use_model,
-        "messages": messages,
-        "stream": True,
-        "options": {
-            "num_predict": num_predict or settings.OLLAMA_NUM_PREDICT,
-            "num_ctx": settings.OLLAMA_NUM_CTX,
-            "temperature": 0.2,
-        },
-        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-    }
-
+    current_messages = _build_messages(system_prompt, user_message, history, language=language)
     timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", f"{settings.OLLAMA_BASE_URL}/api/chat", json=payload) as resp:
-                if resp.status_code != 200:
-                    body = await resp.aread()
-                    raise OllamaUnavailableError(
-                        f"Ollama returned an error (HTTP {resp.status_code}). Is the model "
-                        f"'{use_model}' pulled? Try: ollama pull {use_model}\n{body[:300]}"
-                    )
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    delta = event.get("message", {}).get("content", "")
-                    if delta:
-                        yield delta
-                    if event.get("done"):
-                        break
-    except httpx.ConnectError as e:
-        raise OllamaUnavailableError(
-            f"Could not reach Ollama at {settings.OLLAMA_BASE_URL}. Is `ollama serve` running?"
-        ) from e
-    except httpx.ReadTimeout as e:
-        raise OllamaUnavailableError(
-            "Ollama took too long to respond. The model may be too large for this machine."
-        ) from e
+
+    for cont_step in range(max_continuations + 1):
+        payload = {
+            "model": use_model,
+            "messages": current_messages,
+            "stream": True,
+            "options": {
+                "num_predict": num_predict or settings.OLLAMA_NUM_PREDICT,
+                "num_ctx": settings.OLLAMA_NUM_CTX,
+                "temperature": 0.2,
+                "repeat_penalty": 1.15,
+                "repeat_last_n": 64,
+                "top_k": 40,
+                "top_p": 0.9,
+            },
+            "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+        }
+
+        continuation_needed = False
+        step_response_parts = []
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{settings.OLLAMA_BASE_URL}/api/chat", json=payload) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        raise OllamaUnavailableError(
+                            f"Ollama returned an error (HTTP {resp.status_code}). Is the model "
+                            f"'{use_model}' pulled? Try: ollama pull {use_model}\n{body[:300]}"
+                        )
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = event.get("message", {}).get("content", "")
+                        if delta:
+                            step_response_parts.append(delta)
+                            yield delta
+                        if event.get("done"):
+                            done_reason = event.get("done_reason", "")
+                            # If done_reason indicates token exhaustion rather than natural stop
+                            if done_reason == "length" and cont_step < max_continuations:
+                                continuation_needed = True
+                            break
+        except httpx.ConnectError as e:
+            raise OllamaUnavailableError(
+                f"Could not reach Ollama at {settings.OLLAMA_BASE_URL}. Is `ollama serve` running?"
+            ) from e
+        except httpx.ReadTimeout as e:
+            raise OllamaUnavailableError(
+                "Ollama took too long to respond. The model may be too large for this machine."
+            ) from e
+
+        if not continuation_needed:
+            break
+
+        # Append assistant's partial reply and add continuation directive
+        partial_reply = "".join(step_response_parts)
+        current_messages.append({"role": "assistant", "content": partial_reply})
+        current_messages.append({
+            "role": "user",
+            "content": "Please continue writing the remaining part of the answer from where you left off, without repeating anything you already said."
+        })
 
 
 async def collect_stream(agen: AsyncGenerator[str, None]) -> str:
@@ -232,6 +257,10 @@ def _call_ollama(system_prompt: str, user_message: str, history: List[Dict] = No
                     "num_predict": num_predict or settings.OLLAMA_NUM_PREDICT,
                     "num_ctx": settings.OLLAMA_NUM_CTX,
                     "temperature": 0.2,
+                    "repeat_penalty": 1.15,
+                    "repeat_last_n": 64,
+                    "top_k": 40,
+                    "top_p": 0.9,
                 },
                 "keep_alive": settings.OLLAMA_KEEP_ALIVE,
             },
@@ -285,14 +314,22 @@ def _with_language_reminder(message: str, language: str) -> str:
 
 
 async def stream_answer(message: str, chunks: List[Dict], language: str,
-                         history: List[Dict] = None) -> AsyncGenerator[str, None]:
+                         history: List[Dict] = None, prompt_type: str = "base") -> AsyncGenerator[str, None]:
     """
     Primary entry point for streaming an answer.
+    prompt_type: "base" | "document" | "hybrid"
     Uses Groq if configured, falls back to Ollama automatically.
     Raises LLMUnavailableError if both fail.
     """
     context_text = build_context_text(chunks)
-    system_prompt = BASE_SYSTEM_PROMPT.format(context=context_text, language=language)
+    if prompt_type == "document":
+        template = DOCUMENT_SYSTEM_PROMPT
+    elif prompt_type == "hybrid":
+        template = HYBRID_SYSTEM_PROMPT
+    else:
+        template = BASE_SYSTEM_PROMPT
+
+    system_prompt = template.format(context=context_text, language=language)
     user_message = _with_language_reminder(message, language)
 
     if settings.use_groq:
@@ -361,10 +398,16 @@ async def stream_raw(system_prompt: str, user_message: str, model: str = None,
 
 
 def generate_answer(message: str, chunks: List[Dict], language: str,
-                     history: List[Dict] = None) -> str:
+                     history: List[Dict] = None, prompt_type: str = "base") -> str:
     """Synchronous wrapper — used by non-streaming callers (tests, scripts)."""
     context_text = build_context_text(chunks)
-    system_prompt = BASE_SYSTEM_PROMPT.format(context=context_text, language=language)
+    if prompt_type == "document":
+        template = DOCUMENT_SYSTEM_PROMPT
+    elif prompt_type == "hybrid":
+        template = HYBRID_SYSTEM_PROMPT
+    else:
+        template = BASE_SYSTEM_PROMPT
+    system_prompt = template.format(context=context_text, language=language)
     user_message = _with_language_reminder(message, language)
 
     if settings.use_groq:

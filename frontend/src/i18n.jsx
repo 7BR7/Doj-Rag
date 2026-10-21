@@ -47,6 +47,7 @@ const COPY = {
     emailOptional: "Email (optional)", confirmPassword: "Confirm password", passwordMismatch: "Passwords do not match.", passwordMin: "Password must be at least 6 characters.",
     creatingAccount: "Creating account…", alreadyAccount: "Already have an account?", errorLoad: "Could not load that conversation.", errorDelete: "Could not delete that conversation.",
     errorUpdate: "Could not update the conversation before resending.", errorEmptyExport: "Send a message before exporting this conversation.", errorExport: "Failed to export conversation.", errorTranscribe: "Could not transcribe audio.",
+    transcribing: "Transcribing audio…", genericError: "Something went wrong. Please try again.",
   },
   Hindi: {
     loading: "लोड हो रहा है…", legalAssistant: "कानूनी सहायक", newConversation: "नई बातचीत", emptyConversations: "अभी कोई बातचीत नहीं है। शुरू करने के लिए कानूनी सवाल पूछें।", signedIn: "साइन इन है", logout: "लॉग आउट",

@@ -185,16 +185,36 @@ export async function truncateConversation(conversationId, keepCount) {
 
 export async function transcribeAudio(blob, language = null) {
   const form = new FormData();
-  form.append("audio", blob, "recording.webm");
+  // Always send as .webm so the backend picks the right ffmpeg decoder
+  const filename = blob.name || "recording.webm";
+  form.append("audio", blob, filename);
   const url = language && language !== "Auto-Detect"
     ? `${API_BASE}/api/transcribe?language=${encodeURIComponent(language)}`
     : `${API_BASE}/api/transcribe`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: authHeaders(),
-    body: form,
-  });
-  return handle(res, { authRequired: true });
+
+  // Whisper "small" on CPU may take 30–60 seconds for longer recordings.
+  // Use a dedicated 90-second timeout so we don't drop valid transcriptions.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90_000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: authHeaders(),
+      body: form,
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) {
+      throw new Error("Transcription timed out. Try a shorter recording.");
+    }
+    return handle(res, { authRequired: true });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Transcription timed out. Try a shorter recording.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function sendFeedback({ conversationId, messageIndex, rating }) {

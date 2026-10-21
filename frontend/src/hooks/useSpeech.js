@@ -392,12 +392,38 @@ export function useVoiceRecorder() {
   const chunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const liveTranscriptRef = useRef("");
+  // Safety: auto-stop after 120 seconds to prevent forgotten recordings
+  const autoStopTimerRef = useRef(null);
+  const MAX_RECORDING_MS = 120_000;
+
+  /**
+   * Clear any pending auto-stop timer.
+   */
+  const clearAutoStop = useCallback(() => {
+    if (autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+  }, []);
 
   const start = useCallback(async (requestedLanguage) => {
+    // If already recording, stop gracefully first (defensive state machine)
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try { mediaRecorderRef.current.stop(); } catch (_) {}
+    }
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+      recognitionRef.current = null;
+    }
+    clearAutoStop();
     setError(null);
     liveTranscriptRef.current = "";
 
-    // 1. Try starting Web Speech API for instant zero-latency speech recognition
+    // 1. Try Web Speech API for instant zero-latency transcription.
+    //    NOTE: Chrome/Edge support most Indian languages via Google's cloud ASR
+    //    (requires internet). Firefox does NOT support SpeechRecognition.
+    //    Languages without cloud support will produce empty/garbage results;
+    //    the Faster-Whisper fallback handles those cases.
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
       try {
@@ -406,6 +432,7 @@ export function useVoiceRecorder() {
         recognition.lang = locale;
         recognition.continuous = true;
         recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
 
         recognition.onresult = (event) => {
           let full = "";
@@ -415,68 +442,155 @@ export function useVoiceRecorder() {
           liveTranscriptRef.current = full.trim();
         };
 
-        recognition.onerror = () => {
-          // Non-fatal: MediaRecorder will still capture audio for Faster-Whisper
+        recognition.onerror = (e) => {
+          // Log but don't surface: MediaRecorder still captures audio for Whisper.
+          // Common errors: "no-speech", "aborted", "network" — all non-fatal here.
+          console.debug("Web Speech recognition error (non-fatal):", e.error);
         };
 
         recognition.start();
         recognitionRef.current = recognition;
-      } catch (_) {
+      } catch (wsErr) {
+        console.debug("Web Speech API unavailable:", wsErr);
         recognitionRef.current = null;
       }
     }
 
-    // 2. Start MediaRecorder as audio backup
+    // 2. Start MediaRecorder as the primary audio capture path.
+    //    Even when Web Speech API works, we capture raw audio as a fallback
+    //    in case the real-time transcript is empty or low quality.
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const constraints = {
+        audio: {
+          channelCount: 1,          // mono — Whisper works best with mono
+          sampleRate: 16000,        // 16kHz — native Whisper sample rate
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Prefer audio/webm;codecs=opus for best browser compatibility
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : ""; // browser default
+
+      const recorderOptions = mimeType ? { mimeType } : {};
+      const recorder = new MediaRecorder(stream, recorderOptions);
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      recorder.start();
+      recorder.onerror = (e) => {
+        console.error("MediaRecorder error:", e.error);
+        setError(`Recording error: ${e.error?.name || "unknown"}`);
+        setIsRecording(false);
+        clearAutoStop();
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch (_) {}
+          recognitionRef.current = null;
+        }
+      };
+
+      // Request a data chunk at least every second so we get data even on
+      // very short recordings.
+      recorder.start(1000);
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+
+      // Auto-stop safety timer
+      autoStopTimerRef.current = setTimeout(() => {
+        console.warn("Auto-stopping recording after", MAX_RECORDING_MS / 1000, "seconds");
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.requestData(); // flush last chunk
+          mediaRecorderRef.current.stop();
+        }
+      }, MAX_RECORDING_MS);
+
     } catch (err) {
+      // Stop recognition too if microphone access fails
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch (_) {}
         recognitionRef.current = null;
       }
-      setError("Microphone access was denied or is unavailable.");
+      clearAutoStop();
+      const msg = err?.name === "NotAllowedError"
+        ? "Microphone access was denied. Please allow microphone access in your browser settings."
+        : err?.name === "NotFoundError"
+        ? "No microphone found. Please connect a microphone and try again."
+        : `Microphone error: ${err?.message || "unknown error"}`;
+      setError(msg);
       setIsRecording(false);
     }
-  }, []);
+  }, [clearAutoStop]);
 
   const stop = useCallback(() => {
+    clearAutoStop();
+
     return new Promise((resolve) => {
-      // Stop recognition if active
+      // Stop Web Speech API if active
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch (_) {}
         recognitionRef.current = null;
       }
 
       const recorder = mediaRecorderRef.current;
-      if (!recorder) {
+
+      // If no recorder is active (e.g. mic permission was denied), resolve cleanly
+      if (!recorder || recorder.state === "inactive") {
+        mediaRecorderRef.current = null;
         setIsRecording(false);
         resolve(null);
         return;
       }
 
+      // Request any buffered data before stopping
+      try { recorder.requestData(); } catch (_) {}
+
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        recorder.stream.getTracks().forEach((t) => t.stop());
+        mediaRecorderRef.current = null;
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        // Release all microphone tracks
+        try { recorder.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+        chunksRef.current = [];
         setIsRecording(false);
 
-        // Attach live transcript if captured via browser Web Speech API
+        // Attach the Web Speech real-time transcript (if any).
+        // ChatPage.jsx checks this first before sending to Whisper.
         blob.transcriptText = liveTranscriptRef.current || null;
         resolve(blob);
       };
 
-      recorder.stop();
+      try {
+        recorder.stop();
+      } catch (stopErr) {
+        // If stop() itself throws (e.g. already stopped), resolve with null
+        console.warn("recorder.stop() threw:", stopErr);
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+        resolve(null);
+      }
     });
-  }, []);
+  }, [clearAutoStop]);
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      clearAutoStop();
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch (_) {}
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try { mediaRecorderRef.current.stop(); } catch (_) {}
+      }
+    };
+  }, [clearAutoStop]);
 
   return { isRecording, start, stop, error };
 }

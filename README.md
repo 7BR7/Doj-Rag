@@ -513,3 +513,45 @@ brand mark in the sidebar/header.
   and to `VOICE_LOCALES` in `frontend/src/hooks/useSpeech.js`.
 - **More document types**: add a new parser under `app/rag/`, normalize its
   output in `parser_router.py`, and it plugs straight into chunking/indexing.
+
+---
+
+## 12. 4th-Year Major Project Enhancements
+
+The system incorporates production-grade architecture designed for real-world legal information retrieval:
+
+### 1. Hybrid Tri-Store Retrieval Architecture
+- **ChromaDB**: Primary persistent vector collection for dense semantic search.
+- **FAISS**: High-speed in-memory vector index fallback.
+- **BM25**: Lexical inverted index for exact statutory citations, section numbers, and case references.
+- **RRF (Reciprocal Rank Fusion)**: Combines dense semantic and sparse BM25 scores with priority weighting.
+
+### 2. Dual LLM Provider (Cloud Groq + Local Ollama Fallback)
+- **Groq Hosted Inference**: Fast inference (~300 tok/sec) via `llama-3.1-8b-instant`.
+- **Local Ollama Fallback**: Automatic offline failover to local quantized models (`llama3.2:3b`, `qwen2.5:1.5b`).
+- **Zero Truncation Guarantee**: Token limits (`OLLAMA_NUM_PREDICT=600`, `OLLAMA_TRANSLATE_NUM_PREDICT=800`) prevent partial legal answers.
+
+### 3. Native Multilingual Legal Intelligence (12 Indian Languages)
+- **Supported Languages**: Hindi, Bengali, Telugu, Marathi, Tamil, Urdu, Gujarati, Kannada, Odia, Malayalam, Punjabi, and English.
+- **Query Harmonization**: Translates native-script queries into normalized English legal concepts while strictly preserving section, article, and act identifiers.
+- **Direct Multilingual Synthesis**: Synthesizes verified legal provisions directly in the requested language.
+
+### 4. Verification, Grounding & Explainability
+- **Support & Grounding Verification**: Token-overlap and NLI grounding checks prevent hallucinations and verify legal references.
+- **Explainability Transparency**: Every response includes an inspection panel with:
+  - Direct statutory citations & verified page numbers
+  - Retrieval method used (Exact match, Hybrid RRF, Cross-lingual)
+  - Grounding confidence score (calculated safely without NaN values)
+
+### 5. Security Safeguards & Document Intelligence
+- **Prompt Injection Defense**: Multi-pattern regex safeguards against adversarial jailbreak attempts.
+- **Rate Limiting**: Sliding window request throttle (`check_rate_limit`) protects public endpoints.
+- **Secure Document Upload**: Magic-byte verification (`%PDF`) with OCR detection and executive summary generation.
+
+### 6. Benchmark Evaluation
+Execute the empirical benchmark suite measuring latency percentiles (P50, P95), keyword accuracy, and citation alignment:
+```bash
+python backend/evaluation/evaluate.py
+```
+Test results and latency statistics will be generated in `backend/evaluation/eval_results.json`.
+

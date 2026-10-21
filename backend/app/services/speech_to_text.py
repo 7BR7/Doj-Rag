@@ -62,15 +62,22 @@ def transcribe_audio_bytes(audio_bytes: bytes, filename_hint: str = "audio.wav",
 
         segments, info = model.transcribe(
             tmp_path,
-            beam_size=1,
-            best_of=1,
-            temperature=0.0,
+            beam_size=5,                        # beam_size=1 hurts accuracy significantly
+            best_of=5,
+            temperature=[0.0, 0.2, 0.4],       # fallback temperatures for noisy audio
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=400),
+            vad_parameters=dict(
+                min_silence_duration_ms=500,    # slightly longer — avoids splitting mid-sentence
+                speech_pad_ms=200,              # pad silence to avoid cutting trailing syllables
+            ),
             condition_on_previous_text=False,
             language=target_lang,
+            word_timestamps=False,              # not needed here, saves memory
+            no_speech_threshold=0.6,            # suppress hallucinations on silence/noise
+            log_prob_threshold=-1.0,            # reject low-confidence transcription segments
+            compression_ratio_threshold=2.4,    # filter repeated/degenerate output
         )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
+        text = " ".join(seg.text.strip() for seg in segments if seg.text.strip()).strip()
 
         if not text:
             raise TranscriptionError("Could not detect any speech in the audio.")
